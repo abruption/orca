@@ -4,6 +4,7 @@ import { OrchestrationDb } from './db'
 import { OrchestrationMailboxPointerDelivery } from './mailbox-pointer-delivery'
 import {
   WRITE_ACCEPTED,
+  writeRefused,
   writeUnverifiable,
   type WriteSettlement
 } from '../../../shared/pty-write-settlement'
@@ -44,7 +45,9 @@ function fixture() {
     processIncarnation: incarnation,
     ...(agentIdentity ? { agentIdentity } : {})
   })
-  const write = vi.fn((_pty: string, _data: string): WriteSettlement => WRITE_ACCEPTED)
+  const write = vi.fn(
+    (_pty: string, _data: string): WriteSettlement | Promise<WriteSettlement> => WRITE_ACCEPTED
+  )
   const deps = {
     terminalSubscriptions: registry,
     mailboxOwner: { resolve: () => mailboxOwner },
@@ -135,6 +138,66 @@ describe('bare terminal subscriptions', () => {
     expect(f.write.mock.calls[0][1]).not.toContain('DO_NOT_INJECT_BODY')
     expect(f.registry.status('term_recipient').wake).toBe('submitted')
     expect(f.db.getMessageById(message.id)?.read).toBe(0)
+    f.db.close()
+  })
+
+  it.each([
+    ['accepted', WRITE_ACCEPTED],
+    ['refused', writeRefused('provider_refused_write')],
+    ['unverifiable', writeUnverifiable('provider_threw_after_handoff', true)]
+  ] as const)(
+    'does not attribute an old async pointer %s to a new generation',
+    async (_, result) => {
+      vi.useFakeTimers()
+      const f = fixture()
+      let resolveWrite!: (value: WriteSettlement) => void
+      const pendingWrite = new Promise<WriteSettlement>((resolve) => {
+        resolveWrite = resolve
+      })
+      f.write.mockReturnValueOnce(pendingWrite)
+      f.subscribe()
+      f.mail()
+      f.delivery.deliverForHandle('term_recipient')
+      f.registry.remove('term_recipient')
+      f.subscribe()
+      resolveWrite(result)
+      await vi.advanceTimersByTimeAsync(600)
+      expect(f.registry.status('term_recipient')).toMatchObject({
+        state: 'active',
+        wake: 'deferred',
+        reason: 'awaiting_mail_or_idle',
+        messageIds: []
+      })
+      f.db.close()
+    }
+  )
+
+  it.each([
+    ['accepted', WRITE_ACCEPTED],
+    ['refused', writeRefused('provider_refused_write')],
+    ['unverifiable', writeUnverifiable('provider_threw_after_handoff', true)]
+  ] as const)('does not attribute an old async Enter %s to a new generation', async (_, result) => {
+    vi.useFakeTimers()
+    const f = fixture()
+    let resolveEnter!: (value: WriteSettlement) => void
+    const pendingEnter = new Promise<WriteSettlement>((resolve) => {
+      resolveEnter = resolve
+    })
+    f.write.mockReturnValueOnce(WRITE_ACCEPTED).mockReturnValueOnce(pendingEnter)
+    f.subscribe()
+    f.mail()
+    f.delivery.deliverForHandle('term_recipient')
+    await vi.advanceTimersByTimeAsync(600)
+    f.registry.remove('term_recipient')
+    f.subscribe()
+    resolveEnter(result)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.registry.status('term_recipient')).toMatchObject({
+      state: 'active',
+      wake: 'deferred',
+      reason: 'awaiting_mail_or_idle',
+      messageIds: []
+    })
     f.db.close()
   })
 
@@ -339,6 +402,36 @@ describe('bare terminal subscriptions', () => {
     expect(f.registry.status('term_recipient').wake).toBe('unverifiable')
     f.db.close()
   })
+
+  it.each(['invalid authority', 'Run ownership'] as const)(
+    'cleans stale delivery reservations on working after %s',
+    (condition) => {
+      const f = fixture()
+      f.subscribe()
+      const message = f.mail()
+      expect(
+        f.db.stageMailboxPointerEnter([message.id], {
+          ptyId: 'pty-1',
+          processIncarnation: 'inc-1'
+        })
+      ).toBe(true)
+      if (condition === 'invalid authority') {
+        f.revoke()
+      } else {
+        f.setMailboxOwner('run:owner')
+      }
+      f.delivery.observeAgentWorking('pty-1')
+      expect(f.db.getMessageById(message.id)).toMatchObject({
+        pointer_enter_pending: 0,
+        pointer_pty_id: null,
+        pointer_process_incarnation: null
+      })
+      expect(f.registry.status('term_recipient').state).toBe(
+        condition === 'invalid authority' ? 'host_unverifiable' : 'active'
+      )
+      f.db.close()
+    }
+  )
 
   it('requires re-registration after process replacement and allows later mail', async () => {
     vi.useFakeTimers()

@@ -16,7 +16,7 @@ function fixture() {
     lastAgentStatus: 'idle',
     lastAgentStatusObservedLive: true
   }
-  const authority = {
+  let authority = {
     terminalHandle: 'term_self',
     paneKey: 'tab:leaf',
     processIncarnation: 'inc',
@@ -28,7 +28,7 @@ function fixture() {
   }
   const terminalMailboxSubscriptions = new TerminalMailboxSubscriptions(() => currentAuthority)
   const runtime = {
-    verifyOrchestrationCompatibilityCaller: vi.fn().mockReturnValue(authority),
+    verifyOrchestrationCompatibilityCaller: vi.fn((): typeof authority | null => authority),
     getOrchestrationDispatchAuthority: vi.fn(() => currentAuthority),
     orchestrationCompatibilityHostScopesEqual: vi.fn(
       (left, right) => JSON.stringify(left) === JSON.stringify(right)
@@ -58,6 +58,9 @@ function fixture() {
     changeCurrent: (fields: Partial<Omit<TerminalMailboxSubscriptionBinding, 'createdAt'>>) => {
       currentAuthority = { ...currentAuthority!, ...fields }
       runtime.getOrchestrationDispatchAuthority.mockReturnValue(currentAuthority)
+    },
+    changeVerified: (fields: Partial<typeof authority>) => {
+      authority = { ...authority, ...fields }
     }
   }
 }
@@ -82,7 +85,26 @@ describe('receiver launch authority', () => {
       { currentRuntimeLaunchSufficient: true }
     )
     expect(f.runtime.deliverPendingMessagesForHandle).toHaveBeenCalledWith('term_self')
-    expect(f.invoke('unsubscribe').subscribed).toBe(false)
+    const first = f.invoke('unsubscribe')
+    expect(first.subscribed).toBe(false)
+    expect(f.invoke('unsubscribe')).toEqual(first)
+  })
+  it('allows the original receiver to inspect and remove a subscription after Run ownership', () => {
+    const f = fixture()
+    f.invoke('subscribe')
+    f.runtime.orchestrationMailboxOwner.resolve.mockReturnValue('run:other')
+    f.runtime.getLiveLeafForHandle.mockClear()
+    expect(f.invoke('status').subscribed).toBe(true)
+    expect(f.invoke('unsubscribe')).toMatchObject({ subscribed: false, state: 'unsubscribed' })
+    expect(f.runtime.getLiveLeafForHandle).not.toHaveBeenCalled()
+  })
+  it('does not let a replacement process manage the prior subscription', () => {
+    const f = fixture()
+    f.invoke('subscribe')
+    f.changeCurrent({ processIncarnation: 'inc-other' })
+    f.changeVerified({ processIncarnation: 'inc-other' })
+    expect(() => f.invoke('status')).toThrow('different terminal identity')
+    expect(() => f.invoke('unsubscribe')).toThrow('different terminal identity')
   })
   it.each([
     ['pane', { paneKey: 'tab:other' }],

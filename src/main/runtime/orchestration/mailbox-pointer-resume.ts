@@ -41,6 +41,7 @@ export function resumePendingOrchestrationMailboxPointer<
       }
     : null
   const bare = isTerminalMailbox(args.mailboxHandle)
+  const subscriptionGeneration = args.deps.terminalSubscriptions?.generation(args.mailboxHandle)
   const hasMixedTargets = args.messages.some(
     (message) =>
       message.pointer_pty_id !== staged?.pointer_pty_id ||
@@ -60,7 +61,8 @@ export function resumePendingOrchestrationMailboxPointer<
       expectedTarget ? 'ambiguous_write' : 'host_unverifiable',
       'unverifiable',
       expectedTarget ? 'persisted_target_ambiguous' : 'current_target_unverifiable',
-      messageIds
+      messageIds,
+      subscriptionGeneration
     )
     return true
   }
@@ -111,7 +113,8 @@ export function resumePendingOrchestrationMailboxPointer<
         'ambiguous_write',
         'unverifiable',
         'prior_write_unverifiable',
-        messageIds
+        messageIds,
+        subscriptionGeneration
       )
       return true
     }

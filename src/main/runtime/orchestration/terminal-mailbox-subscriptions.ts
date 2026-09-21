@@ -16,6 +16,11 @@ type Subscription = {
   status: TerminalMailboxSubscriptionStatus
 }
 
+type InactiveSubscription = {
+  binding?: TerminalMailboxSubscriptionBinding
+  status: TerminalMailboxSubscriptionStatus
+}
+
 export type TerminalMailboxSubscriptionBinding = Readonly<{
   hostScope: OrchestrationCompatibilityTerminalAuthority['hostScope']
   terminalHandle: string
@@ -25,7 +30,7 @@ export type TerminalMailboxSubscriptionBinding = Readonly<{
   createdAt: string
 }>
 
-type CurrentTerminalMailboxAuthority = Omit<TerminalMailboxSubscriptionBinding, 'createdAt'>
+export type CurrentTerminalMailboxAuthority = Omit<TerminalMailboxSubscriptionBinding, 'createdAt'>
 
 function hostScopesEqual(
   left: TerminalMailboxSubscriptionBinding['hostScope'],
@@ -38,7 +43,7 @@ function hostScopesEqual(
 export class TerminalMailboxSubscriptions {
   private nextGeneration = 0
   private readonly entries = new Map<string, Subscription>()
-  private readonly inactive = new Map<string, TerminalMailboxSubscriptionStatus>()
+  private readonly inactive = new Map<string, InactiveSubscription>()
 
   constructor(
     private readonly resolveCurrent: (
@@ -75,10 +80,6 @@ export class TerminalMailboxSubscriptions {
     return this.entries.get(handle)?.generation
   }
 
-  hasPty(ptyId: string): boolean {
-    return [...this.entries.values()].some((entry) => entry.binding.ptyId === ptyId)
-  }
-
   retirePty(ptyId: string): void {
     for (const [handle, entry] of this.entries) {
       if (entry.binding.ptyId === ptyId) {
@@ -92,8 +93,28 @@ export class TerminalMailboxSubscriptions {
     if (entry) {
       this.deactivate(handle, entry, 'unsubscribed', 'explicit_unsubscribe')
     } else {
-      this.inactive.set(handle, this.inactiveStatus('unsubscribed', 'explicit_unsubscribe'))
+      const inactive = this.inactive.get(handle)
+      if (inactive?.status.state === 'unsubscribed') {
+        return
+      }
+      this.inactive.set(handle, {
+        binding: inactive?.binding,
+        status: inactive
+          ? {
+              ...inactive.status,
+              subscribed: false,
+              state: 'unsubscribed',
+              wake: 'unsupported',
+              reason: 'explicit_unsubscribe'
+            }
+          : this.inactiveStatus('unsubscribed', 'explicit_unsubscribe')
+      })
     }
+  }
+
+  canManage(handle: string, current: CurrentTerminalMailboxAuthority): boolean {
+    const binding = this.entries.get(handle)?.binding ?? this.inactive.get(handle)?.binding
+    return binding === undefined || this.currentMatchesBinding(current, binding)
   }
 
   matches(handle: string, target: OrchestrationMailboxPointerSubmitTarget): boolean {
@@ -114,10 +135,10 @@ export class TerminalMailboxSubscriptions {
     wake: TerminalMailboxWake,
     reason: string,
     messageIds: string[],
-    generation?: number
+    generation: number | undefined
   ): void {
     const entry = this.entries.get(handle)
-    if (entry && (generation === undefined || entry.generation === generation)) {
+    if (entry && generation !== undefined && entry.generation === generation) {
       entry.status = {
         ...entry.status,
         subscribed: true,
@@ -140,7 +161,7 @@ export class TerminalMailboxSubscriptions {
     }
     const inactive = this.inactive.get(handle)
     return inactive
-      ? { ...inactive, messageIds: [...inactive.messageIds] }
+      ? { ...inactive.status, messageIds: [...inactive.status.messageIds] }
       : this.inactiveStatus('unsubscribed', 'not_subscribed')
   }
 
@@ -219,11 +240,14 @@ export class TerminalMailboxSubscriptions {
   ): void {
     this.entries.delete(handle)
     this.inactive.set(handle, {
-      ...entry.status,
-      subscribed: false,
-      state,
-      wake: 'unsupported',
-      reason
+      binding: entry.binding,
+      status: {
+        ...entry.status,
+        subscribed: false,
+        state,
+        wake: 'unsupported',
+        reason
+      }
     })
   }
 

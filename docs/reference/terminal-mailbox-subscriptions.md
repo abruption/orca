@@ -26,6 +26,9 @@ intact while status reports `host_unverifiable`; it is not evidence of process
 exit. A new client against a host without
 `orchestration.terminal-subscription.v1` reports `unsupported` without attempting
 registration. Existing Run/Dispatch mail keeps its original delivery path.
+The original receiver may still inspect or remove its subscription after ownership
+moves to a Run or Dispatch; both actions require the stored exact terminal identity,
+so a replacement process cannot manage the prior registration.
 
 The runtime rechecks the full binding before writing a pointer and before
 submitting Enter. Auto-Enter requires a positively resolved, unchanged, non-Cursor
@@ -34,7 +37,8 @@ working, permission-blocked, unwritable or identity-ambiguous after the pointer,
 the pointer remains for manual submission and a later idle edge does not send
 Enter. A sender cannot override these checks. Only the existing runtime PTY writer
 performs the write; no provider socket, native queue or `session-peer` installation
-is required.
+is required. Notification results are generation-fenced, so completion of an older
+pointer or Enter write cannot overwrite the status of a later re-registration.
 
 `subscription status` describes the latest notification attempt, not message
 processing. Its state distinguishes `active`, `blocked_permission`,

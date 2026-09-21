@@ -41,12 +41,14 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
     try {
       const leaf = this.deps.getLiveLeafForHandle(terminalHandle)
       if (leaf.lastAgentStatus !== 'idle' || !leaf.lastAgentStatusObservedLive) {
+        const generation = this.deps.terminalSubscriptions?.generation(handle)
         this.deps.terminalSubscriptions?.record(
           handle,
           leaf.lastAgentStatus === 'working' ? 'blocked_working' : 'host_unverifiable',
           'deferred',
           'live_idle_not_observed',
-          []
+          [],
+          generation
         )
         return
       }
@@ -94,12 +96,14 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
     // than dropping — `isAgentSettledForDelivery` arms the re-check.
     if (!this.deps.isAgentSettledForDelivery(leaf)) {
       if (bare) {
+        const generation = this.deps.terminalSubscriptions?.generation(mailboxHandle)
         this.deps.terminalSubscriptions?.record(
           mailboxHandle,
           'blocked_permission',
           'deferred',
           'permission_or_prompt_unsettled',
-          []
+          [],
+          generation
         )
       }
       this.parkRedelivery(mailboxHandle, options.reservedTypes)
@@ -197,6 +201,10 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
 
   retirePty(ptyId: string): void {
     this.deps.terminalSubscriptions?.retirePty(ptyId)
+    this.retireDeliveryState(ptyId)
+  }
+
+  private retireDeliveryState(ptyId: string): void {
     this.coldParkedPtys.delete(ptyId)
     const { flight, releasedMailboxes } = this.state.retirePty(ptyId)
     if (flight?.enterTimer != null) {
@@ -231,10 +239,7 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
         }
         return
       }
-      if (this.deps.terminalSubscriptions?.hasPty(ptyId)) {
-        return
-      }
-      this.retirePty(ptyId)
+      this.retireDeliveryState(ptyId)
       this.deps.getDb()?.releasePendingMailboxPointerForPty(ptyId)
     } catch {
       // Runtime teardown can close the DB before the final PTY frame is drained.

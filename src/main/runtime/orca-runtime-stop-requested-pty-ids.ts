@@ -222,34 +222,45 @@ export class OrcaRuntimeWithStopRequestedPtyIds extends OrcaRuntimeWithRuntimeId
       throw new Error('A verified current terminal launch is required for mailbox subscription.')
     }
     const handle = authority.terminalHandle
-    const { leaf } = this.getLiveLeafForHandle(handle)
-    const target = leaf.ptyId
-      ? this.resolveOrchestrationPointerSubmitTarget(leaf, leaf.ptyId)
-      : null
-    if (!target || this.orchestrationMailboxOwner.resolve(leaf) !== handle) {
-      throw new Error('Mailbox subscriptions require a live bare terminal mailbox.')
+    const current = this.getOrchestrationDispatchAuthority(handle)
+    if (
+      !current?.paneKey ||
+      !current.processIncarnation ||
+      current.paneKey !== authority.paneKey ||
+      current.processIncarnation !== authority.processIncarnation ||
+      !this.orchestrationCompatibilityHostScopesEqual(current.hostScope, authority.hostScope)
+    ) {
+      throw new Error('The attested terminal identity changed before subscription registration.')
+    }
+    const currentBinding = {
+      hostScope: current.hostScope,
+      terminalHandle: handle,
+      paneKey: current.paneKey,
+      ptyId: current.ptyId,
+      processIncarnation: current.processIncarnation
+    }
+    if (
+      action !== 'subscribe' &&
+      !this.terminalMailboxSubscriptions.canManage(handle, currentBinding)
+    ) {
+      throw new Error('Mailbox subscription state belongs to a different terminal identity.')
     }
     if (action === 'unsubscribe') {
       this.terminalMailboxSubscriptions.remove(handle)
     }
     if (action === 'subscribe') {
-      const current = this.getOrchestrationDispatchAuthority(handle)
-      if (
-        !current?.paneKey ||
-        !current.processIncarnation ||
-        current.paneKey !== authority.paneKey ||
-        current.ptyId !== target.leaf.ptyId ||
-        current.processIncarnation !== authority.processIncarnation ||
-        !this.orchestrationCompatibilityHostScopesEqual(current.hostScope, authority.hostScope)
-      ) {
+      const { leaf } = this.getLiveLeafForHandle(handle)
+      const target = leaf.ptyId
+        ? this.resolveOrchestrationPointerSubmitTarget(leaf, leaf.ptyId)
+        : null
+      if (target && target.leaf.ptyId !== current.ptyId) {
         throw new Error('The attested terminal identity changed before subscription registration.')
       }
+      if (!target || this.orchestrationMailboxOwner.resolve(leaf) !== handle) {
+        throw new Error('Mailbox subscriptions require a live bare terminal mailbox.')
+      }
       this.terminalMailboxSubscriptions.register(target, {
-        hostScope: current.hostScope,
-        terminalHandle: handle,
-        paneKey: current.paneKey,
-        ptyId: current.ptyId,
-        processIncarnation: current.processIncarnation,
+        ...currentBinding,
         createdAt: new Date().toISOString()
       })
       this.deliverPendingMessagesForHandle(handle)

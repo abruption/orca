@@ -46,13 +46,15 @@ export function stageOrchestrationMailboxPointer<TWaiter extends OrchestrationMe
   if (bare && !args.deps.terminalSubscriptions?.matches(args.mailboxHandle, expectedTarget)) {
     return
   }
+  const subscriptionGeneration = args.deps.terminalSubscriptions?.generation(args.mailboxHandle)
   if (bare && !args.deps.isAgentSettledForDelivery(expectedTarget.leaf)) {
     args.deps.terminalSubscriptions?.record(
       args.mailboxHandle,
       'blocked_permission',
       'deferred',
       'permission_or_prompt_unsettled',
-      args.messages.map((message) => message.id)
+      args.messages.map((message) => message.id),
+      subscriptionGeneration
     )
     return
   }
@@ -66,7 +68,8 @@ export function stageOrchestrationMailboxPointer<TWaiter extends OrchestrationMe
       expectedTarget.leaf.lastAgentStatus === 'working' ? 'blocked_working' : 'host_unverifiable',
       'deferred',
       'live_idle_not_observed',
-      args.messages.map((message) => message.id)
+      args.messages.map((message) => message.id),
+      subscriptionGeneration
     )
     return
   }
@@ -76,7 +79,8 @@ export function stageOrchestrationMailboxPointer<TWaiter extends OrchestrationMe
       'host_unverifiable',
       'unverifiable',
       'pty_not_writable',
-      args.messages.map((message) => message.id)
+      args.messages.map((message) => message.id),
+      subscriptionGeneration
     )
     return
   }
@@ -96,7 +100,6 @@ export function stageOrchestrationMailboxPointer<TWaiter extends OrchestrationMe
   ) {
     return
   }
-  const subscriptionGeneration = args.deps.terminalSubscriptions?.generation(args.mailboxHandle)
   const flight = args.state.beginFlight(ptyId)
   flight.processIncarnation = expectedTarget.processIncarnation
   flight.stagedMessageIds = args.messages.map((message) => message.id)
