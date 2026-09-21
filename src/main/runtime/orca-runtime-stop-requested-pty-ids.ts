@@ -1,5 +1,8 @@
 // @ts-nocheck -- mechanically split from OrcaRuntimeService; behavior is covered by AST equivalence and characterization tests.
-import { TerminalMailboxSubscriptions } from './orchestration/terminal-mailbox-subscriptions'
+import {
+  TerminalMailboxSubscriptions,
+  type CurrentTerminalMailboxAuthority
+} from './orchestration/terminal-mailbox-subscriptions'
 import type { OrchestrationCompatibilityEvidence } from '../../shared/orchestration-compatibility-evidence'
 import { OrchestrationStructuredMailboxPointerDelivery } from './orchestration/structured-mailbox-pointer-delivery'
 import { createStructuredMailboxPointerHost } from './orchestration/structured-mailbox-pointer-host'
@@ -211,18 +214,16 @@ export class OrcaRuntimeWithStopRequestedPtyIds extends OrcaRuntimeWithRuntimeId
       : null
   })
 
-  terminalMailboxSubscription(
-    action: 'subscribe' | 'unsubscribe' | 'status',
+  getTerminalMailboxSubscriptionBinding(
     evidence: OrchestrationCompatibilityEvidence | undefined
-  ) {
+  ): CurrentTerminalMailboxAuthority {
     const authority = this.verifyOrchestrationCompatibilityCaller(evidence, {
       currentRuntimeLaunchSufficient: true
     })
     if (!authority) {
       throw new Error('A verified current terminal launch is required for mailbox subscription.')
     }
-    const handle = authority.terminalHandle
-    const current = this.getOrchestrationDispatchAuthority(handle)
+    const current = this.getOrchestrationDispatchAuthority(authority.terminalHandle)
     if (
       !current?.paneKey ||
       !current.processIncarnation ||
@@ -230,15 +231,23 @@ export class OrcaRuntimeWithStopRequestedPtyIds extends OrcaRuntimeWithRuntimeId
       current.processIncarnation !== authority.processIncarnation ||
       !this.orchestrationCompatibilityHostScopesEqual(current.hostScope, authority.hostScope)
     ) {
-      throw new Error('The attested terminal identity changed before subscription registration.')
+      throw new Error('The attested terminal identity changed before mailbox subscription access.')
     }
-    const currentBinding = {
+    return {
       hostScope: current.hostScope,
-      terminalHandle: handle,
+      terminalHandle: authority.terminalHandle,
       paneKey: current.paneKey,
       ptyId: current.ptyId,
       processIncarnation: current.processIncarnation
     }
+  }
+
+  terminalMailboxSubscription(
+    action: 'subscribe' | 'unsubscribe' | 'status',
+    evidence: OrchestrationCompatibilityEvidence | undefined
+  ) {
+    const currentBinding = this.getTerminalMailboxSubscriptionBinding(evidence)
+    const handle = currentBinding.terminalHandle
     if (
       action !== 'subscribe' &&
       !this.terminalMailboxSubscriptions.canManage(handle, currentBinding)
@@ -253,7 +262,7 @@ export class OrcaRuntimeWithStopRequestedPtyIds extends OrcaRuntimeWithRuntimeId
       const target = leaf.ptyId
         ? this.resolveOrchestrationPointerSubmitTarget(leaf, leaf.ptyId)
         : null
-      if (target && target.leaf.ptyId !== current.ptyId) {
+      if (target && target.leaf.ptyId !== currentBinding.ptyId) {
         throw new Error('The attested terminal identity changed before subscription registration.')
       }
       if (!target || this.orchestrationMailboxOwner.resolve(leaf) !== handle) {

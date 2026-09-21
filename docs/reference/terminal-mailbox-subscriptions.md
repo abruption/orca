@@ -50,6 +50,19 @@ subscribe and unsubscribe receipts support exact `--retry-request` replay. The
 existing send receipt, unread/read flags and acknowledgement semantics are
 unchanged. Inbox inspection does not acknowledge a message.
 
+Status access itself requires a currently verified exact receiver binding.
+`host_unverifiable` and `proven_exited` are retained runtime states and may appear in
+a race with a verified request, but a disconnected or exited receiver cannot query
+them later without valid current launch authority.
+
+Mutation replay is bound to the verified host, handle, pane, PTY and process
+incarnation. Reusing a request ID from another receiver fails as a request mismatch.
+A completed replay does not reapply the ephemeral mutation: JSON output returns the
+original receipt as `historicalReplay` while the top-level fields report current
+read-only status, and human output labels the result as historical. After a runtime
+restart, the same distinction applies if the exact process binding survives; a new
+process incarnation requires a new request ID and explicit subscription.
+
 After an ambiguous write, inspect the inbox explicitly. The same execution
 incarnation must not replay the pointer or Enter. A restart, missing leaf or
 transport timeout does not release an attempted reservation. Once the execution

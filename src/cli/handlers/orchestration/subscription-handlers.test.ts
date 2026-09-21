@@ -49,4 +49,31 @@ describe('terminal subscription CLI capability negotiation', () => {
     })
     expect(call).toHaveBeenLastCalledWith('orchestration.subscribe', {})
   })
+  it('labels a replayed mutation as historical and prints current status', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({
+        result: { capabilities: [TERMINAL_MAILBOX_SUBSCRIPTION_CAPABILITY] }
+      })
+      .mockResolvedValueOnce({
+        result: {
+          subscribed: false,
+          wake: 'unsupported',
+          reason: 'explicit_unsubscribe',
+          messageIds: [],
+          historicalReplay: { subscribed: true },
+          mutation: { requestId: '11111111-1111-4111-8111-111111111111', replayed: true }
+        }
+      })
+    await ORCHESTRATION_SUBSCRIPTION_HANDLERS['orchestration subscribe']({
+      client: Object.assign(new RuntimeClient(), { call }),
+      cwd: process.cwd(),
+      flags: new Map([['retry-request', '11111111-1111-4111-8111-111111111111']]),
+      json: false
+    })
+    expect(log).toHaveBeenCalledWith(
+      'Historical mutation replay; current status: Not subscribed: unsupported (explicit_unsubscribe)'
+    )
+  })
 })

@@ -19,5 +19,10 @@ export type TerminalMailboxSubscriptionStatus = {
   reason: string
   messageIds: string[]
   createdAt: string | null
-  submitPolicy: 'recognized_non_cursor'
+  submitPolicy: 'recognized_non_cursor' | 'manual_only'
+}
+
+export type TerminalMailboxSubscriptionResult = TerminalMailboxSubscriptionStatus & {
+  historicalReplay?: unknown
+  mutation?: { requestId: string; replayed: boolean }
 }

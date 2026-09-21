@@ -137,6 +137,7 @@ describe('bare terminal subscriptions', () => {
     ])
     expect(f.write.mock.calls[0][1]).not.toContain('DO_NOT_INJECT_BODY')
     expect(f.registry.status('term_recipient').wake).toBe('submitted')
+    expect(f.registry.status('term_recipient').submitPolicy).toBe('recognized_non_cursor')
     expect(f.db.getMessageById(message.id)?.read).toBe(0)
     f.db.close()
   })
@@ -329,6 +330,7 @@ describe('bare terminal subscriptions', () => {
     await vi.advanceTimersByTimeAsync(600)
     expect(f.write).toHaveBeenCalledTimes(1)
     expect(f.registry.status('term_recipient').reason).toBe('manual_submit_required')
+    expect(f.registry.status('term_recipient').submitPolicy).toBe('manual_only')
     f.db.close()
   })
 
@@ -342,6 +344,7 @@ describe('bare terminal subscriptions', () => {
     await vi.advanceTimersByTimeAsync(600)
     expect(f.write).toHaveBeenCalledTimes(1)
     expect(f.registry.status('term_recipient').reason).toBe('manual_submit_required')
+    expect(f.registry.status('term_recipient').submitPolicy).toBe('manual_only')
     f.db.close()
   })
 

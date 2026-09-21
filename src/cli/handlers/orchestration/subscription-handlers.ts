@@ -2,7 +2,7 @@ import type { CommandHandler } from '../../dispatch'
 import { printResult } from '../../format'
 import {
   TERMINAL_MAILBOX_SUBSCRIPTION_CAPABILITY,
-  type TerminalMailboxSubscriptionStatus
+  type TerminalMailboxSubscriptionResult
 } from '../../../shared/terminal-mailbox-subscription'
 import { callOrchestrationMutation } from './mutation-request'
 
@@ -24,13 +24,13 @@ export const ORCHESTRATION_SUBSCRIPTION_HANDLERS: Record<string, CommandHandler>
           TERMINAL_MAILBOX_SUBSCRIPTION_CAPABILITY
         )
           ? await (mutations.has(method)
-              ? callOrchestrationMutation<TerminalMailboxSubscriptionStatus>(
+              ? callOrchestrationMutation<TerminalMailboxSubscriptionResult>(
                   client,
                   flags,
                   method,
                   {}
                 )
-              : client.call<TerminalMailboxSubscriptionStatus>(method, {}))
+              : client.call<TerminalMailboxSubscriptionResult>(method, {}))
           : {
               ...status,
               result: {
@@ -40,15 +40,15 @@ export const ORCHESTRATION_SUBSCRIPTION_HANDLERS: Record<string, CommandHandler>
                 reason: 'host_capability_missing',
                 messageIds: [],
                 createdAt: null,
-                submitPolicy: 'recognized_non_cursor' as const
+                submitPolicy: 'manual_only' as const
               }
             }
-        printResult(
-          result,
-          json,
-          (value) =>
-            `${value.subscribed ? 'Subscribed' : 'Not subscribed'}: ${value.wake} (${value.reason})`
-        )
+        printResult(result, json, (value) => {
+          const current = `${value.subscribed ? 'Subscribed' : 'Not subscribed'}: ${value.wake} (${value.reason})`
+          return value.mutation?.replayed
+            ? `Historical mutation replay; current status: ${current}`
+            : current
+        })
       }) satisfies CommandHandler
     ])
   )

@@ -10,6 +10,12 @@ export function isTerminalMailbox(handle: string): boolean {
   return /^term_[a-zA-Z0-9_-]+$/.test(handle)
 }
 
+function submitPolicy(target: OrchestrationMailboxPointerSubmitTarget) {
+  return target.agentIdentity && target.agentIdentity !== 'cursor'
+    ? ('recognized_non_cursor' as const)
+    : ('manual_only' as const)
+}
+
 type Subscription = {
   generation: number
   binding: TerminalMailboxSubscriptionBinding
@@ -71,7 +77,7 @@ export class TerminalMailboxSubscriptions {
         reason: 'awaiting_mail_or_idle',
         messageIds: [],
         createdAt: binding.createdAt,
-        submitPolicy: 'recognized_non_cursor'
+        submitPolicy: submitPolicy(target)
       }
     })
   }
@@ -126,6 +132,7 @@ export class TerminalMailboxSubscriptions {
       this.deactivate(handle, entry, 'stale_replaced', 'target_identity_changed')
       return false
     }
+    entry.status = { ...entry.status, submitPolicy: submitPolicy(target) }
     return this.refreshCurrent(handle, entry)
   }
 
@@ -262,7 +269,7 @@ export class TerminalMailboxSubscriptions {
       reason,
       messageIds: [],
       createdAt: null,
-      submitPolicy: 'recognized_non_cursor'
+      submitPolicy: 'manual_only'
     }
   }
 }

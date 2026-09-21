@@ -5,7 +5,21 @@ export const ORCHESTRATION_SUBSCRIPTION_METHODS = [
   defineMethod({
     name: 'orchestration.subscribe',
     params: TerminalSubscriptionParams,
-    handler: (_params, { runtime, orchestrationCompatibilityEvidence, recordMutationReceipt }) => {
+    handler: (
+      _params,
+      {
+        runtime,
+        orchestrationCompatibilityEvidence,
+        recordMutationReceipt,
+        replayedMutationReceipt
+      }
+    ) => {
+      if (replayedMutationReceipt !== undefined) {
+        return {
+          ...runtime.terminalMailboxSubscription('status', orchestrationCompatibilityEvidence),
+          historicalReplay: replayedMutationReceipt
+        }
+      }
       const receipt = runtime.terminalMailboxSubscription(
         'subscribe',
         orchestrationCompatibilityEvidence
@@ -17,7 +31,21 @@ export const ORCHESTRATION_SUBSCRIPTION_METHODS = [
   defineMethod({
     name: 'orchestration.unsubscribe',
     params: TerminalSubscriptionParams,
-    handler: (_params, { runtime, orchestrationCompatibilityEvidence, recordMutationReceipt }) => {
+    handler: (
+      _params,
+      {
+        runtime,
+        orchestrationCompatibilityEvidence,
+        recordMutationReceipt,
+        replayedMutationReceipt
+      }
+    ) => {
+      if (replayedMutationReceipt !== undefined) {
+        return {
+          ...runtime.terminalMailboxSubscription('status', orchestrationCompatibilityEvidence),
+          historicalReplay: replayedMutationReceipt
+        }
+      }
       const receipt = runtime.terminalMailboxSubscription(
         'unsubscribe',
         orchestrationCompatibilityEvidence

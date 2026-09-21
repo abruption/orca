@@ -82,6 +82,10 @@ export function isTerminalPromptMutation(method: string, params: unknown): boole
   )
 }
 
+export function isTerminalMailboxSubscriptionMutation(method: string): boolean {
+  return method === 'orchestration.subscribe' || method === 'orchestration.unsubscribe'
+}
+
 export function isDurableMutation(method: string, params: unknown): boolean {
   return isOrchestrationMutation(method, params) || isTerminalPromptMutation(method, params)
 }
