@@ -8,6 +8,7 @@ import {
   type WriteSettlement
 } from '../../../shared/pty-write-settlement'
 import type { OrchestrationMailboxLeaf } from './mailbox-owner'
+import { MAILBOX_POINTER_WRITE_ATTEMPTED } from './db/messages/mailbox-pointer-enter-state'
 
 function fixture() {
   const db = new OrchestrationDb(':memory:')
@@ -23,12 +24,30 @@ function fixture() {
   let incarnation = 'inc-1'
   let authority = true
   let settled = true
-  const registry = new TerminalMailboxSubscriptions()
-  const target = () => ({ leaf, terminalHandle: 'term_recipient', processIncarnation: incarnation })
+  let mailboxOwner = 'term_recipient'
+  let waiters: ReadonlySet<{ typeFilter: string[] | undefined }> | undefined
+  let agentIdentity: 'codex' | 'cursor' | undefined = 'codex'
+  const currentAuthority = () =>
+    authority
+      ? {
+          hostScope: { kind: 'local' as const, hostId: 'local' as const },
+          terminalHandle: 'term_recipient',
+          paneKey: 'tab-1:leaf-1',
+          ptyId: 'pty-1',
+          processIncarnation: incarnation
+        }
+      : null
+  const registry = new TerminalMailboxSubscriptions(currentAuthority)
+  const target = () => ({
+    leaf,
+    terminalHandle: 'term_recipient',
+    processIncarnation: incarnation,
+    ...(agentIdentity ? { agentIdentity } : {})
+  })
   const write = vi.fn((_pty: string, _data: string): WriteSettlement => WRITE_ACCEPTED)
   const deps = {
     terminalSubscriptions: registry,
-    mailboxOwner: { resolve: () => 'term_recipient' },
+    mailboxOwner: { resolve: () => mailboxOwner },
     deliveryTarget: {
       resolveTerminalHandle: () => 'term_recipient',
       deferForAbsenceProbe: () => false
@@ -38,7 +57,7 @@ function fixture() {
     getLeafKey: () => 'tab-1:leaf-1',
     getLiveLeafForHandle: () => leaf,
     isAgentSettledForDelivery: () => settled,
-    getMessageWaiters: () => undefined,
+    getMessageWaiters: () => waiters,
     getTabTitle: () => null,
     getCliCommand: () => 'orca' as const,
     getTerminalHandleForLeafKey: () => 'term_recipient',
@@ -49,8 +68,8 @@ function fixture() {
   }
   const delivery = new OrchestrationMailboxPointerDelivery(deps)
   const subscribe = () => {
-    const current = incarnation
-    registry.register(target(), () => authority && current === incarnation)
+    const current = currentAuthority()!
+    registry.register(target(), { ...current, createdAt: '2026-09-21T00:00:00.000Z' })
   }
   const mail = () =>
     db.insertMessage({
@@ -77,6 +96,15 @@ function fixture() {
     },
     setSettled: (value: boolean) => {
       settled = value
+    },
+    setAgentIdentity: (value: 'codex' | 'cursor' | undefined) => {
+      agentIdentity = value
+    },
+    setWaiters: (value: ReadonlySet<{ typeFilter: string[] | undefined }> | undefined) => {
+      waiters = value
+    },
+    setMailboxOwner: (value: string) => {
+      mailboxOwner = value
     }
   }
 }
@@ -136,7 +164,25 @@ describe('bare terminal subscriptions', () => {
     }
   )
 
-  it('defers Enter when working and submits once on idle', async () => {
+  it('keeps attempted pointer history ambiguous when unsubscribed before Enter', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    f.subscribe()
+    const message = f.mail()
+    f.delivery.deliverForHandle('term_recipient')
+    f.registry.remove('term_recipient')
+    await vi.advanceTimersByTimeAsync(600)
+    expect(f.write).toHaveBeenCalledTimes(1)
+    expect(f.db.getMessageById(message.id)).toMatchObject({
+      delivered_at: null,
+      pointer_enter_pending: MAILBOX_POINTER_WRITE_ATTEMPTED,
+      pointer_pty_id: 'pty-1',
+      pointer_process_incarnation: 'inc-1'
+    })
+    f.db.close()
+  })
+
+  it('leaves a staged pointer for manual submit when the pane starts working', async () => {
     vi.useFakeTimers()
     const f = fixture()
     f.subscribe()
@@ -148,7 +194,8 @@ describe('bare terminal subscriptions', () => {
     f.leaf.lastAgentStatus = 'idle'
     f.delivery.observeAgentIdle('pty-1')
     await vi.advanceTimersByTimeAsync(1)
-    expect(f.write).toHaveBeenCalledTimes(2)
+    expect(f.write).toHaveBeenCalledTimes(1)
+    expect(f.registry.status('term_recipient').state).toBe('blocked_working')
     f.db.close()
   })
 
@@ -159,6 +206,39 @@ describe('bare terminal subscriptions', () => {
     f.setSettled(false)
     f.delivery.deliverForHandle('term_recipient')
     expect(f.write).not.toHaveBeenCalled()
+    f.db.close()
+  })
+
+  it('does not auto-Enter after permission changes behind a visible pointer', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    f.subscribe()
+    f.mail()
+    f.delivery.deliverForHandle('term_recipient')
+    f.setSettled(false)
+    await vi.advanceTimersByTimeAsync(600)
+    expect(f.write).toHaveBeenCalledTimes(1)
+    expect(f.registry.status('term_recipient').state).toBe('blocked_permission')
+    f.setSettled(true)
+    f.delivery.observeAgentIdle('pty-1')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(f.write).toHaveBeenCalledTimes(1)
+    f.db.close()
+  })
+
+  it('disables the direct lane when a Run takes mailbox ownership', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    f.subscribe()
+    f.mail()
+    f.delivery.deliverForHandle('term_recipient')
+    f.setMailboxOwner('run:owner')
+    await vi.advanceTimersByTimeAsync(600)
+    expect(f.write).toHaveBeenCalledTimes(1)
+    expect(f.registry.status('term_recipient')).toMatchObject({
+      state: 'blocked_permission',
+      reason: 'mailbox_ownership_changed'
+    })
     f.db.close()
   })
 
@@ -179,13 +259,50 @@ describe('bare terminal subscriptions', () => {
   it('preserves Cursor no-auto-Enter', async () => {
     vi.useFakeTimers()
     const f = fixture()
-    f.leaf.lastOscTitle = 'Cursor Agent'
+    f.setAgentIdentity('cursor')
     f.subscribe()
     f.mail()
     f.delivery.deliverForHandle('term_recipient')
     await vi.advanceTimersByTimeAsync(600)
     expect(f.write).toHaveBeenCalledTimes(1)
     expect(f.registry.status('term_recipient').reason).toBe('manual_submit_required')
+    f.db.close()
+  })
+
+  it('requires a positive agent identity before auto-Enter', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    f.setAgentIdentity(undefined)
+    f.subscribe()
+    f.mail()
+    f.delivery.deliverForHandle('term_recipient')
+    await vi.advanceTimersByTimeAsync(600)
+    expect(f.write).toHaveBeenCalledTimes(1)
+    expect(f.registry.status('term_recipient').reason).toBe('manual_submit_required')
+    f.db.close()
+  })
+
+  it('does not auto-Enter when the positive agent identity changes after the pointer', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    f.subscribe()
+    f.mail()
+    f.delivery.deliverForHandle('term_recipient')
+    f.setAgentIdentity('cursor')
+    await vi.advanceTimersByTimeAsync(600)
+    expect(f.write).toHaveBeenCalledTimes(1)
+    expect(f.registry.status('term_recipient').reason).toBe('manual_submit_required')
+    f.db.close()
+  })
+
+  it('lets an unfiltered inbox waiter preempt pointer delivery', () => {
+    const f = fixture()
+    f.subscribe()
+    const message = f.mail()
+    f.setWaiters(new Set([{ typeFilter: undefined }]))
+    f.delivery.deliverForHandle('term_recipient')
+    expect(f.write).not.toHaveBeenCalled()
+    expect(f.db.getMessageById(message.id)?.read).toBe(0)
     f.db.close()
   })
 
@@ -233,6 +350,7 @@ describe('bare terminal subscriptions', () => {
     f.replace()
     f.delivery.deliverForHandle('term_recipient')
     expect(f.write).toHaveBeenCalledTimes(1)
+    expect(f.registry.status('term_recipient').state).toBe('stale_replaced')
     f.subscribe()
     f.mail()
     f.delivery.deliverForHandle('term_recipient')
@@ -246,7 +364,10 @@ describe('bare terminal subscriptions', () => {
     f.subscribe()
     expect(new TerminalMailboxSubscriptions().status('term_recipient').subscribed).toBe(false)
     f.delivery.retirePty('pty-1')
-    expect(f.registry.status('term_recipient').subscribed).toBe(false)
+    expect(f.registry.status('term_recipient')).toMatchObject({
+      subscribed: false,
+      state: 'proven_exited'
+    })
     f.db.close()
   })
 
@@ -257,7 +378,10 @@ describe('bare terminal subscriptions', () => {
     f.subscribe()
     expect(f.registry.generation('term_recipient')).toBe(generation)
     f.revoke()
-    expect(f.registry.status('term_recipient').subscribed).toBe(false)
+    expect(f.registry.status('term_recipient')).toMatchObject({
+      subscribed: true,
+      state: 'host_unverifiable'
+    })
     f.db.close()
   })
 })

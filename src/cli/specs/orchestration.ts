@@ -19,8 +19,8 @@ export const ORCHESTRATION_COMMAND_SPECS: CommandSpec[] = [
   ].map(({ path, summary }) => ({
     path,
     summary,
-    usage: `orca ${path.join(' ')} [--json]`,
-    allowedFlags: [...GLOBAL_FLAGS]
+    usage: `orca ${path.join(' ')}${path.at(-1) === 'status' ? '' : ' [--retry-request <id>]'} [--json]`,
+    allowedFlags: path.at(-1) === 'status' ? [...GLOBAL_FLAGS] : [...GLOBAL_FLAGS, 'retry-request']
   })),
   {
     path: ['orchestration', 'run-create'],

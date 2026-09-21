@@ -41,6 +41,13 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
     try {
       const leaf = this.deps.getLiveLeafForHandle(terminalHandle)
       if (leaf.lastAgentStatus !== 'idle' || !leaf.lastAgentStatusObservedLive) {
+        this.deps.terminalSubscriptions?.record(
+          handle,
+          leaf.lastAgentStatus === 'working' ? 'blocked_working' : 'host_unverifiable',
+          'deferred',
+          'live_idle_not_observed',
+          []
+        )
         return
       }
       const mailboxHandle = this.deps.mailboxOwner.resolve(leaf, handle)
@@ -86,6 +93,15 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
     // check; gating the commit point cannot be bypassed. Refusal parks and re-offers rather
     // than dropping — `isAgentSettledForDelivery` arms the re-check.
     if (!this.deps.isAgentSettledForDelivery(leaf)) {
+      if (bare) {
+        this.deps.terminalSubscriptions?.record(
+          mailboxHandle,
+          'blocked_permission',
+          'deferred',
+          'permission_or_prompt_unsettled',
+          []
+        )
+      }
       this.parkRedelivery(mailboxHandle, options.reservedTypes)
       return
     }

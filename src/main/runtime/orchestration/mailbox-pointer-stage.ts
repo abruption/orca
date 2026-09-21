@@ -39,14 +39,45 @@ export function stageOrchestrationMailboxPointer<TWaiter extends OrchestrationMe
     return
   }
   const expectedTarget = args.deps.resolveSubmitTarget(args.leaf, ptyId)
+  if (!expectedTarget) {
+    return
+  }
+  const bare = isTerminalMailbox(args.mailboxHandle)
+  if (bare && !args.deps.terminalSubscriptions?.matches(args.mailboxHandle, expectedTarget)) {
+    return
+  }
+  if (bare && !args.deps.isAgentSettledForDelivery(expectedTarget.leaf)) {
+    args.deps.terminalSubscriptions?.record(
+      args.mailboxHandle,
+      'blocked_permission',
+      'deferred',
+      'permission_or_prompt_unsettled',
+      args.messages.map((message) => message.id)
+    )
+    return
+  }
   if (
-    !expectedTarget ||
-    (isTerminalMailbox(args.mailboxHandle) &&
-      (!args.deps.terminalSubscriptions?.matches(args.mailboxHandle, expectedTarget) ||
-        !args.deps.isAgentSettledForDelivery(expectedTarget.leaf) ||
-        expectedTarget.leaf.lastAgentStatus !== 'idle' ||
-        !expectedTarget.leaf.writable))
+    bare &&
+    (expectedTarget.leaf.lastAgentStatus !== 'idle' ||
+      !expectedTarget.leaf.lastAgentStatusObservedLive)
   ) {
+    args.deps.terminalSubscriptions?.record(
+      args.mailboxHandle,
+      expectedTarget.leaf.lastAgentStatus === 'working' ? 'blocked_working' : 'host_unverifiable',
+      'deferred',
+      'live_idle_not_observed',
+      args.messages.map((message) => message.id)
+    )
+    return
+  }
+  if (bare && !expectedTarget.leaf.writable) {
+    args.deps.terminalSubscriptions?.record(
+      args.mailboxHandle,
+      'host_unverifiable',
+      'unverifiable',
+      'pty_not_writable',
+      args.messages.map((message) => message.id)
+    )
     return
   }
   const db = args.deps.getDb()
@@ -105,6 +136,7 @@ export function stageOrchestrationMailboxPointer<TWaiter extends OrchestrationMe
   const preserveAmbiguousWrite = (): void => {
     args.deps.terminalSubscriptions?.record(
       args.mailboxHandle,
+      'ambiguous_write',
       'unverifiable',
       'pointer_write_unverifiable',
       flight.stagedMessageIds,
@@ -172,13 +204,16 @@ function finishPointerWriteAndStageEnter<TWaiter extends OrchestrationMessageWai
       }
       return
     }
-    if (
-      [args.leaf.lastOscTitle, args.leaf.paneTitle, args.deps.getTabTitle(args.leaf.tabId)].some(
-        isCursorAgentTitle
-      )
-    ) {
+    const bare = isTerminalMailbox(args.mailboxHandle)
+    const requiresManualSubmit = bare
+      ? expectedTarget.agentIdentity === undefined || expectedTarget.agentIdentity === 'cursor'
+      : [args.leaf.lastOscTitle, args.leaf.paneTitle, args.deps.getTabTitle(args.leaf.tabId)].some(
+          isCursorAgentTitle
+        )
+    if (requiresManualSubmit) {
       args.deps.terminalSubscriptions?.record(
         args.mailboxHandle,
+        'active',
         'deferred',
         'manual_submit_required',
         flight.stagedMessageIds,

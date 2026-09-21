@@ -15,15 +15,23 @@ describe('subscription RPC identity boundary', () => {
           action === 'subscribe' ? 0 : action === 'unsubscribe' ? 1 : 2
         ]
       const evidence = { terminalHandle: 'term_self', paneKey: 'tab:leaf', launchToken: 'secret' }
-      const terminalMailboxSubscription = vi.fn()
+      const receipt = { subscribed: action === 'subscribe' }
+      const terminalMailboxSubscription = vi.fn().mockReturnValue(receipt)
+      const recordMutationReceipt = vi.fn()
       method.handler(
         {},
         {
           runtime: Object.assign(new OrcaRuntimeService(), { terminalMailboxSubscription }),
-          orchestrationCompatibilityEvidence: evidence
+          orchestrationCompatibilityEvidence: evidence,
+          recordMutationReceipt
         }
       )
       expect(terminalMailboxSubscription).toHaveBeenCalledWith(action, evidence)
+      if (action === 'status') {
+        expect(recordMutationReceipt).not.toHaveBeenCalled()
+      } else {
+        expect(recordMutationReceipt).toHaveBeenCalledWith(receipt)
+      }
     }
   )
 })

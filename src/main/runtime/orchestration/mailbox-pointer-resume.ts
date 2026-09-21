@@ -40,6 +40,30 @@ export function resumePendingOrchestrationMailboxPointer<
         processIncarnation: staged.pointer_process_incarnation ?? ''
       }
     : null
+  const bare = isTerminalMailbox(args.mailboxHandle)
+  const hasMixedTargets = args.messages.some(
+    (message) =>
+      message.pointer_pty_id !== staged?.pointer_pty_id ||
+      message.pointer_process_incarnation !== staged?.pointer_process_incarnation
+  )
+  if (
+    bare &&
+    (!ptyId ||
+      newestSequence === undefined ||
+      !expectedTarget ||
+      !staged ||
+      !persistedTarget ||
+      hasMixedTargets)
+  ) {
+    args.deps.terminalSubscriptions?.record(
+      args.mailboxHandle,
+      expectedTarget ? 'ambiguous_write' : 'host_unverifiable',
+      'unverifiable',
+      expectedTarget ? 'persisted_target_ambiguous' : 'current_target_unverifiable',
+      messageIds
+    )
+    return true
+  }
   if (
     !ptyId ||
     newestSequence === undefined ||
@@ -47,11 +71,7 @@ export function resumePendingOrchestrationMailboxPointer<
     !staged ||
     staged.pointer_pty_id !== ptyId ||
     staged.pointer_process_incarnation !== expectedTarget.processIncarnation ||
-    args.messages.some(
-      (message) =>
-        message.pointer_pty_id !== staged.pointer_pty_id ||
-        message.pointer_process_incarnation !== staged.pointer_process_incarnation
-    )
+    hasMixedTargets
   ) {
     const db = args.deps.getDb()
     if (db) {
@@ -88,6 +108,7 @@ export function resumePendingOrchestrationMailboxPointer<
     if (isTerminalMailbox(args.mailboxHandle)) {
       args.deps.terminalSubscriptions?.record(
         args.mailboxHandle,
+        'ambiguous_write',
         'unverifiable',
         'prior_write_unverifiable',
         messageIds

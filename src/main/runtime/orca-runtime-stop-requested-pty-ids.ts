@@ -198,7 +198,18 @@ export class OrcaRuntimeWithStopRequestedPtyIds extends OrcaRuntimeWithRuntimeId
     isLeafPtyProvenAbsent: (ptyId) => this.isLeafPtyProvenAbsent(ptyId)
   })
 
-  protected readonly terminalMailboxSubscriptions = new TerminalMailboxSubscriptions()
+  protected readonly terminalMailboxSubscriptions = new TerminalMailboxSubscriptions((handle) => {
+    const current = this.getOrchestrationDispatchAuthority(handle)
+    return current?.paneKey && current.processIncarnation
+      ? {
+          hostScope: current.hostScope,
+          terminalHandle: current.terminalHandle,
+          paneKey: current.paneKey,
+          ptyId: current.ptyId,
+          processIncarnation: current.processIncarnation
+        }
+      : null
+  })
 
   terminalMailboxSubscription(
     action: 'subscribe' | 'unsubscribe' | 'status',
@@ -222,19 +233,24 @@ export class OrcaRuntimeWithStopRequestedPtyIds extends OrcaRuntimeWithRuntimeId
       this.terminalMailboxSubscriptions.remove(handle)
     }
     if (action === 'subscribe') {
-      // Retain only the existing runtime launch proof, never a provider credential.
-      const proof = { ...evidence, ...(evidence?.host ? { host: { ...evidence.host } } : {}) }
-      this.terminalMailboxSubscriptions.register(target, () => {
-        const current = this.verifyOrchestrationCompatibilityCaller(proof, {
-          currentRuntimeLaunchSufficient: true
-        })
-        return Boolean(
-          current &&
-          current.terminalHandle === handle &&
-          current.paneKey === authority.paneKey &&
-          current.processIncarnation === authority.processIncarnation &&
-          JSON.stringify(current.hostScope) === JSON.stringify(authority.hostScope)
-        )
+      const current = this.getOrchestrationDispatchAuthority(handle)
+      if (
+        !current?.paneKey ||
+        !current.processIncarnation ||
+        current.paneKey !== authority.paneKey ||
+        current.ptyId !== target.leaf.ptyId ||
+        current.processIncarnation !== authority.processIncarnation ||
+        !this.orchestrationCompatibilityHostScopesEqual(current.hostScope, authority.hostScope)
+      ) {
+        throw new Error('The attested terminal identity changed before subscription registration.')
+      }
+      this.terminalMailboxSubscriptions.register(target, {
+        hostScope: current.hostScope,
+        terminalHandle: handle,
+        paneKey: current.paneKey,
+        ptyId: current.ptyId,
+        processIncarnation: current.processIncarnation,
+        createdAt: new Date().toISOString()
       })
       this.deliverPendingMessagesForHandle(handle)
     }
