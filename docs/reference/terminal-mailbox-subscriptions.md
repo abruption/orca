@@ -46,6 +46,9 @@ processing. Its state distinguishes `active`, `blocked_permission`,
 `proven_exited` and `unsubscribed`. `submitted` means the Enter write was accepted;
 `deferred` includes manual submission; `unverifiable` means the current host or a
 write result cannot be proved. `messageIds` identifies the attempted batch. The
+`submitPolicy` value names the eligibility rule, not the current agent verdict:
+`recognized_non_cursor` still requires a positive non-Cursor identity at submission
+time, while Cursor and unknown identities remain manual. The
 subscribe and unsubscribe receipts support exact `--retry-request` replay. The
 existing send receipt, unread/read flags and acknowledgement semantics are
 unchanged. Inbox inspection does not acknowledge a message.

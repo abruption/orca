@@ -19,7 +19,7 @@ export type TerminalMailboxSubscriptionStatus = {
   reason: string
   messageIds: string[]
   createdAt: string | null
-  submitPolicy: 'recognized_non_cursor' | 'manual_only'
+  submitPolicy: 'recognized_non_cursor'
 }
 
 export type TerminalMailboxSubscriptionResult = TerminalMailboxSubscriptionStatus & {

@@ -77,17 +77,23 @@ describe('subscription RPC identity boundary', () => {
       paneKey,
       launchToken: `secret-${paneKey}`
     })
-    const createDispatcher = () => {
+    const createDispatcher = (options?: {
+      processIncarnation?: string
+      rejectBinding?: boolean
+    }) => {
       const runtime = new OrcaRuntimeService()
       runtime.setOrchestrationDb(db)
       vi.spyOn(runtime, 'getTerminalMailboxSubscriptionBinding').mockImplementation((proof) => {
+        if (options?.rejectBinding) {
+          throw new Error('verified current terminal launch required')
+        }
         const paneKey = proof?.paneKey ?? 'missing'
         return {
           hostScope: { kind: 'local', hostId: 'local' },
           terminalHandle: proof?.terminalHandle ?? 'missing',
           paneKey,
           ptyId: `pty-${paneKey}`,
-          processIncarnation: `inc-${paneKey}`
+          processIncarnation: options?.processIncarnation ?? `inc-${paneKey}`
         }
       })
       const mutate = vi
@@ -167,6 +173,22 @@ describe('subscription RPC identity boundary', () => {
         }
       })
       expect(restarted.mutate).toHaveBeenCalledWith('status', evidence('pane-a'))
+
+      const replaced = createDispatcher({ processIncarnation: 'inc-replaced' })
+      await expect(
+        replaced.dispatcher.dispatch(
+          request('orchestration.subscribe', 'receiver-bound', evidence('pane-a'), 'rpc-6')
+        )
+      ).resolves.toMatchObject({ ok: false, error: { code: 'request_mismatch' } })
+      expect(replaced.mutate).not.toHaveBeenCalled()
+
+      const invalid = createDispatcher({ rejectBinding: true })
+      await expect(
+        invalid.dispatcher.dispatch(
+          request('orchestration.subscribe', 'receiver-bound', evidence('pane-a'), 'rpc-7')
+        )
+      ).resolves.toMatchObject({ ok: false })
+      expect(invalid.mutate).not.toHaveBeenCalled()
     } finally {
       db.close()
     }

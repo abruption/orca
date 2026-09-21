@@ -40,7 +40,7 @@ export const ORCHESTRATION_SUBSCRIPTION_HANDLERS: Record<string, CommandHandler>
                 reason: 'host_capability_missing',
                 messageIds: [],
                 createdAt: null,
-                submitPolicy: 'manual_only' as const
+                submitPolicy: 'recognized_non_cursor' as const
               }
             }
         printResult(result, json, (value) => {
