@@ -13,6 +13,7 @@ import {
   MAILBOX_POINTER_RESERVED,
   MAILBOX_POINTER_WRITE_ATTEMPTED
 } from './db/messages/mailbox-pointer-enter-state'
+import { isTerminalMailbox } from './terminal-mailbox-subscriptions'
 import { resumePendingOrchestrationMailboxPointer } from './mailbox-pointer-resume'
 import { stageOrchestrationMailboxPointer } from './mailbox-pointer-stage'
 
@@ -61,10 +62,18 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
   ): void {
     const db = this.deps.getDb()
     const mailboxHandle = options.mailboxHandle
-    if (!db || (!mailboxHandle.startsWith('run:') && !mailboxHandle.startsWith('dispatch:'))) {
-      return
-    }
-    if (!this.deps.getTerminalHandleForLeafKey(this.leafKey(leaf))) {
+    const terminalHandle = this.deps.getTerminalHandleForLeafKey(this.leafKey(leaf))
+    const bare = isTerminalMailbox(mailboxHandle)
+    const target = bare && leaf.ptyId ? this.deps.resolveSubmitTarget(leaf, leaf.ptyId) : null
+    if (
+      !db ||
+      !terminalHandle ||
+      (bare
+        ? !target ||
+          !this.deps.terminalSubscriptions?.matches(mailboxHandle, target) ||
+          this.deps.mailboxOwner.resolve(leaf) !== mailboxHandle
+        : !mailboxHandle.startsWith('run:') && !mailboxHandle.startsWith('dispatch:'))
+    ) {
       return
     }
     if (db.hasOutstandingMailboxDelivery?.(mailboxHandle)) {
@@ -171,6 +180,7 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
   }
 
   retirePty(ptyId: string): void {
+    this.deps.terminalSubscriptions?.retirePty(ptyId)
     this.coldParkedPtys.delete(ptyId)
     const { flight, releasedMailboxes } = this.state.retirePty(ptyId)
     if (flight?.enterTimer != null) {
@@ -203,6 +213,9 @@ export class OrchestrationMailboxPointerDelivery<TWaiter extends OrchestrationMe
         if (this.coldParkedPtys.has(ptyId)) {
           this.state.deferFlightUntilIdle(ptyId)
         }
+        return
+      }
+      if (this.deps.terminalSubscriptions?.hasPty(ptyId)) {
         return
       }
       this.retirePty(ptyId)

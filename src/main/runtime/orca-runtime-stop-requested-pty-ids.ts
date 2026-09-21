@@ -1,4 +1,6 @@
 // @ts-nocheck -- mechanically split from OrcaRuntimeService; behavior is covered by AST equivalence and characterization tests.
+import { TerminalMailboxSubscriptions } from './orchestration/terminal-mailbox-subscriptions'
+import type { OrchestrationCompatibilityEvidence } from '../../shared/orchestration-compatibility-evidence'
 import { OrchestrationStructuredMailboxPointerDelivery } from './orchestration/structured-mailbox-pointer-delivery'
 import { createStructuredMailboxPointerHost } from './orchestration/structured-mailbox-pointer-host'
 import { isStructuredWorkerHandle } from './structured-worker-identity'
@@ -196,7 +198,51 @@ export class OrcaRuntimeWithStopRequestedPtyIds extends OrcaRuntimeWithRuntimeId
     isLeafPtyProvenAbsent: (ptyId) => this.isLeafPtyProvenAbsent(ptyId)
   })
 
+  protected readonly terminalMailboxSubscriptions = new TerminalMailboxSubscriptions()
+
+  terminalMailboxSubscription(
+    action: 'subscribe' | 'unsubscribe' | 'status',
+    evidence: OrchestrationCompatibilityEvidence | undefined
+  ) {
+    const authority = this.verifyOrchestrationCompatibilityCaller(evidence, {
+      currentRuntimeLaunchSufficient: true
+    })
+    if (!authority) {
+      throw new Error('A verified current terminal launch is required for mailbox subscription.')
+    }
+    const handle = authority.terminalHandle
+    const { leaf } = this.getLiveLeafForHandle(handle)
+    const target = leaf.ptyId
+      ? this.resolveOrchestrationPointerSubmitTarget(leaf, leaf.ptyId)
+      : null
+    if (!target || this.orchestrationMailboxOwner.resolve(leaf) !== handle) {
+      throw new Error('Mailbox subscriptions require a live bare terminal mailbox.')
+    }
+    if (action === 'unsubscribe') {
+      this.terminalMailboxSubscriptions.remove(handle)
+    }
+    if (action === 'subscribe') {
+      // Retain only the existing runtime launch proof, never a provider credential.
+      const proof = { ...evidence, ...(evidence?.host ? { host: { ...evidence.host } } : {}) }
+      this.terminalMailboxSubscriptions.register(target, () => {
+        const current = this.verifyOrchestrationCompatibilityCaller(proof, {
+          currentRuntimeLaunchSufficient: true
+        })
+        return Boolean(
+          current &&
+          current.terminalHandle === handle &&
+          current.paneKey === authority.paneKey &&
+          current.processIncarnation === authority.processIncarnation &&
+          JSON.stringify(current.hostScope) === JSON.stringify(authority.hostScope)
+        )
+      })
+      this.deliverPendingMessagesForHandle(handle)
+    }
+    return this.terminalMailboxSubscriptions.status(handle)
+  }
+
   protected readonly orchestrationMailboxPointerDelivery = new OrchestrationMailboxPointerDelivery({
+    terminalSubscriptions: this.terminalMailboxSubscriptions,
     mailboxOwner: this.orchestrationMailboxOwner,
     deliveryTarget: this.orchestrationMailboxDeliveryTarget,
     getDb: () => this._orchestrationDb,

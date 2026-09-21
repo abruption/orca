@@ -1,3 +1,4 @@
+import { isTerminalMailbox } from './terminal-mailbox-subscriptions'
 import type {
   OrchestrationMailboxPointerMessage,
   PointerDeliveryDependencies
@@ -84,6 +85,15 @@ export function resumePendingOrchestrationMailboxPointer<
     return false
   }
   if (phases.size !== 1 || !phases.has(MAILBOX_POINTER_RESERVED)) {
+    if (isTerminalMailbox(args.mailboxHandle)) {
+      args.deps.terminalSubscriptions?.record(
+        args.mailboxHandle,
+        'unverifiable',
+        'prior_write_unverifiable',
+        messageIds
+      )
+      return true
+    }
     // Same-incarnation recovery cannot tell whether pointer text or Enter reached the PTY.
     args.deps
       .getDb()

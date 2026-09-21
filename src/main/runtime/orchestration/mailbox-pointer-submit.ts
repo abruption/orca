@@ -1,3 +1,7 @@
+import {
+  isTerminalMailbox,
+  type TerminalMailboxSubscriptions
+} from './terminal-mailbox-subscriptions'
 import type { OrchestrationDb } from './db'
 import {
   MAILBOX_POINTER_ENTER_ATTEMPTED,
@@ -15,7 +19,9 @@ import type {
 import type { WriteSettlement } from '../../../shared/pty-write-settlement'
 
 type PointerSubmitDependencies<TWaiter extends OrchestrationMessageWaiter> = {
-  mailboxOwner: OrchestrationMailboxOwner
+  terminalSubscriptions?: TerminalMailboxSubscriptions
+  isAgentSettledForDelivery?: (leaf: OrchestrationMailboxLeaf) => boolean
+  mailboxOwner: Pick<OrchestrationMailboxOwner, 'resolve'>
   state: OrchestrationMailboxPointerState
   getDb: () => OrchestrationDb | null
   resolveSubmitTarget: (
@@ -44,6 +50,7 @@ export function submitOrchestrationMailboxPointer<TWaiter extends OrchestrationM
     newestSequence: number
     ptyId: string
     flight: OrchestrationMailboxDeliveryFlight
+    subscriptionGeneration?: number
     expectedTarget: OrchestrationMailboxPointerSubmitTarget
   }
 ): void {
@@ -86,7 +93,33 @@ export function submitOrchestrationMailboxPointer<TWaiter extends OrchestrationM
         exactTarget?.leaf.lastAgentStatusObservedLive === true &&
         (exactTarget.leaf.lastAgentStatus === 'idle' ||
           exactTarget.leaf.lastAgentStatus === 'working')
-      if (!exactTarget?.leaf.writable || !sameMailbox) {
+      const bare = isTerminalMailbox(input.mailboxHandle)
+      if (
+        bare &&
+        (deps.terminalSubscriptions?.generation(input.mailboxHandle) !==
+          input.subscriptionGeneration ||
+          !exactTarget ||
+          !deps.terminalSubscriptions?.matches(input.mailboxHandle, exactTarget))
+      ) {
+        releaseWithoutRedrive = true
+      } else if (
+        bare &&
+        exactTarget &&
+        (exactTarget.leaf.lastAgentStatus !== 'idle' ||
+          !exactTarget.leaf.lastAgentStatusObservedLive ||
+          !deps.isAgentSettledForDelivery?.(exactTarget.leaf))
+      ) {
+        deps.terminalSubscriptions?.record(
+          input.mailboxHandle,
+          'deferred',
+          'awaiting_idle',
+          messageIds,
+          input.subscriptionGeneration
+        )
+        deps.state.deferFlightUntilIdle(input.ptyId)
+        input.flight.submitEnter = () => submitOrchestrationMailboxPointer(deps, input)
+        deferredUntilIdle = true
+      } else if (!exactTarget?.leaf.writable || !sameMailbox) {
         clearAndRedrive = true
       } else if (
         exactTarget.leaf.lastAgentStatusObservedLive &&
@@ -117,6 +150,17 @@ export function submitOrchestrationMailboxPointer<TWaiter extends OrchestrationM
           expectedPhase = MAILBOX_POINTER_ENTER_ATTEMPTED
           const enterSettlement = await deps.writePty(input.ptyId, '\r')
           submitted = enterSettlement.outcome === 'accepted'
+          deps.terminalSubscriptions?.record(
+            input.mailboxHandle,
+            submitted
+              ? 'submitted'
+              : enterSettlement.outcome === 'refused'
+                ? 'deferred'
+                : 'unverifiable',
+            `enter_${enterSettlement.outcome}`,
+            messageIds,
+            input.subscriptionGeneration
+          )
           if (!deps.state.isCurrentFlight(input.ptyId, input.flight)) {
             finalizeReservation = false
             return
@@ -130,6 +174,13 @@ export function submitOrchestrationMailboxPointer<TWaiter extends OrchestrationM
       }
     })
     .catch(() => {
+      deps.terminalSubscriptions?.record(
+        input.mailboxHandle,
+        'unverifiable',
+        'submit_unverifiable',
+        messageIds,
+        input.subscriptionGeneration
+      )
       if (!preserveAmbiguousDelivery) {
         clearAndRedrive = true
         redriveClearedPointer = false
