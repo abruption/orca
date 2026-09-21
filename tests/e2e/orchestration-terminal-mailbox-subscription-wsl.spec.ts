@@ -30,8 +30,42 @@ type LedgerEntry = {
   wslDistro?: string
 }
 
+const LEDGER_STRING_KEYS = [
+  'requestId',
+  'stdout',
+  'stderr',
+  'error',
+  'data',
+  'terminalHandle',
+  'wslDistro'
+] satisfies readonly (keyof LedgerEntry)[]
+
 function quote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function parseLedgerEntry(line: string): LedgerEntry | null {
+  const value: unknown = JSON.parse(line)
+  if (!isRecord(value) || typeof value.event !== 'string') {
+    return null
+  }
+  const entry: LedgerEntry = { event: value.event }
+  for (const key of LEDGER_STRING_KEYS) {
+    if (typeof value[key] === 'string') {
+      entry[key] = value[key]
+    }
+  }
+  if (typeof value.status === 'number') {
+    entry.status = value.status
+  }
+  if (typeof value.hasLaunchToken === 'boolean') {
+    entry.hasLaunchToken = value.hasLaunchToken
+  }
+  return entry
 }
 
 function runWsl(args: string[], input?: string): string {
@@ -65,7 +99,8 @@ function readLedger(filePath: string): LedgerEntry[] {
   return value
     .split('\n')
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as LedgerEntry)
+    .map(parseLedgerEntry)
+    .filter((entry): entry is LedgerEntry => entry !== null)
 }
 
 async function readUserDataDir(electronApp: ElectronApplication): Promise<string> {

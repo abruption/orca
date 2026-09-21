@@ -26,6 +26,10 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 function claudeTrustBootstrap(home: string): string {
   const source = [
     "const fs=require('node:fs')",
@@ -41,10 +45,8 @@ function claudeTrustBootstrap(home: string): string {
 
 function removeClaudeTestTrust(worktreePath: string): void {
   const file = path.join(homedir(), '.claude.json')
-  const data = JSON.parse(readFileSync(file, 'utf8')) as {
-    projects?: Record<string, unknown>
-  }
-  if (!data.projects?.[worktreePath]) {
+  const data: unknown = JSON.parse(readFileSync(file, 'utf8'))
+  if (!isRecord(data) || !isRecord(data.projects) || !data.projects[worktreePath]) {
     return
   }
   delete data.projects[worktreePath]
@@ -248,11 +250,13 @@ test.describe('live terminal mailbox subscription agents', () => {
                 return false
               }
               try {
-                const receipt = JSON.parse(readFileSync(subscriptionReceiptPath, 'utf8')) as {
-                  ok?: boolean
-                  result?: { subscribed?: boolean }
-                }
-                return receipt.ok === true && receipt.result?.subscribed === true
+                const receipt: unknown = JSON.parse(readFileSync(subscriptionReceiptPath, 'utf8'))
+                return (
+                  isRecord(receipt) &&
+                  receipt.ok === true &&
+                  isRecord(receipt.result) &&
+                  receipt.result.subscribed === true
+                )
               } catch {
                 return false
               }
