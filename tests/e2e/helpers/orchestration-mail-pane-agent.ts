@@ -132,8 +132,14 @@ setInterval(() => {
   }
   lastCliStamp = stamp
   log({ event: 'cli-start', requestId: request.requestId, cliEntry, cliCommand })
+  const cliExecutable =
+    cliCommand && process.platform === 'win32' ? process.env.ComSpec || 'cmd.exe' : cliCommand
+  const cliArgs =
+    cliCommand && process.platform === 'win32'
+      ? ['/d', '/s', '/c', cliCommand, ...request.args]
+      : request.args
   const result = cliCommand
-    ? spawnSync(cliCommand, request.args, {
+    ? spawnSync(cliExecutable, cliArgs, {
         env: { ...process.env, ORCA_DEV_CLI_INVOCATION: '1' },
         encoding: 'utf8',
         timeout: 20_000

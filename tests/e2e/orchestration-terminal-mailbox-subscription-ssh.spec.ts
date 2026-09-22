@@ -1,7 +1,11 @@
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import type { ElectronApplication, Page } from '@stablyai/playwright-test'
 import { RuntimeClient } from '../../src/cli/runtime-client'
+import { powerShellCommand, powerShellLiteral } from '../../src/main/ssh/ssh-remote-powershell'
 import type { RuntimeTerminalListResult } from '../../src/shared/runtime-types'
 import { test, expect } from './helpers/orca-app'
 import {
@@ -20,21 +24,112 @@ const SSH_HOST =
   process.env.ORCA_E2E_SSH_SUBSCRIPTION_HOST ?? process.env.ORCA_E2E_SSH_US_HOST ?? '100.73.93.61'
 const SSH_USER =
   process.env.ORCA_E2E_SSH_SUBSCRIPTION_USER ?? process.env.ORCA_E2E_SSH_US_USER ?? 'ubuntu'
+const SSH_PASSWORD = process.env.ORCA_E2E_SSH_SUBSCRIPTION_PASSWORD
+const REMOTE_PLATFORM = process.env.ORCA_E2E_SSH_SUBSCRIPTION_PLATFORM ?? 'posix'
+const WINDOWS_REMOTE = REMOTE_PLATFORM === 'win32'
 const SSH_DESTINATION = `${SSH_USER}@${SSH_HOST}`
 const POINTER_COMMAND = 'orca orchestration inbox'
 
-test.use({ orcaAppExtraEnv: { ORCA_SSH_FORCE_SYSTEM_TRANSPORT: '1' } })
+test.use({
+  orcaAppExtraEnv: SSH_PASSWORD ? {} : { ORCA_SSH_FORCE_SYSTEM_TRANSPORT: '1' },
+  trace: SSH_PASSWORD ? 'off' : 'retain-on-failure'
+})
 
 function ssh(command: string, input?: string): string {
-  return execFileSync(
-    'ssh',
-    ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', SSH_DESTINATION, command],
-    { encoding: 'utf8', input, timeout: 60_000 }
+  const authArgs = SSH_PASSWORD
+    ? ['-o', 'PreferredAuthentications=password', '-o', 'PubkeyAuthentication=no']
+    : ['-o', 'BatchMode=yes']
+  const sshArgs = [...authArgs, '-o', 'ConnectTimeout=15', SSH_DESTINATION, command]
+  if (!SSH_PASSWORD) {
+    return execFileSync('ssh', sshArgs, { encoding: 'utf8', input, timeout: 60_000 })
+  }
+  return withPasswordFile((passwordFile) =>
+    execFileSync('sshpass', ['-f', passwordFile, 'ssh', ...sshArgs], {
+      encoding: 'utf8',
+      input,
+      timeout: 60_000
+    })
   )
 }
 
 function quote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function windowsQuote(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`
+}
+
+function withPasswordFile<T>(run: (passwordFile: string) => T): T {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'orca-ssh-password-'))
+  const passwordFile = path.join(tempDir, 'credential')
+  writeFileSync(passwordFile, SSH_PASSWORD ?? '', { mode: 0o600 })
+  try {
+    return run(passwordFile)
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+function writeWindowsFile(remotePath: string, value: string): void {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), 'orca-ssh-windows-file-'))
+  const localPath = path.join(tempDir, 'payload')
+  writeFileSync(localPath, value)
+  try {
+    const authArgs = SSH_PASSWORD
+      ? ['-o', 'PreferredAuthentications=password', '-o', 'PubkeyAuthentication=no']
+      : ['-o', 'BatchMode=yes']
+    const destination = `${SSH_DESTINATION}:${remotePath.replaceAll('\\', '/')}`
+    if (SSH_PASSWORD) {
+      withPasswordFile((passwordFile) =>
+        execFileSync(
+          'sshpass',
+          ['-f', passwordFile, 'scp', '-q', ...authArgs, localPath, destination],
+          { timeout: 60_000 }
+        )
+      )
+    } else {
+      execFileSync('scp', ['-q', ...authArgs, localPath, destination], { timeout: 60_000 })
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+function seedRemoteRepo(remoteRepo: string): void {
+  if (!WINDOWS_REMOTE) {
+    ssh(
+      `mkdir -p ${quote(remoteRepo)} && cd ${quote(remoteRepo)} && git init -q && git config user.email e2e@test.local && git config user.name 'Orca SSH E2E' && printf 'ssh mailbox e2e\n' > README.md && git add README.md && git commit -qm initial`
+    )
+    return
+  }
+  ssh(
+    powerShellCommand(
+      [
+        `$repo = ${powerShellLiteral(remoteRepo)}`,
+        'New-Item -ItemType Directory -Force -Path $repo | Out-Null',
+        '& git -C $repo init -q',
+        '& git -C $repo config user.email e2e@test.local',
+        "& git -C $repo config user.name 'Orca SSH E2E'",
+        "[IO.File]::WriteAllText((Join-Path $repo 'README.md'), 'ssh mailbox e2e' + [Environment]::NewLine)",
+        '& git -C $repo add README.md',
+        '& git -C $repo commit -qm initial',
+        'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }'
+      ].join('\n')
+    )
+  )
+}
+
+function removeRemoteRoot(remoteRoot: string): void {
+  if (WINDOWS_REMOTE) {
+    ssh(
+      powerShellCommand(
+        `Remove-Item -LiteralPath ${powerShellLiteral(remoteRoot)} -Recurse -Force -ErrorAction SilentlyContinue`
+      )
+    )
+    return
+  }
+  ssh(`rm -rf ${quote(remoteRoot)}`)
 }
 
 type RemoteAgent = {
@@ -47,17 +142,32 @@ type RemoteAgent = {
 }
 
 function createRemoteAgent(remoteDir: string): RemoteAgent {
-  const script = `${remoteDir}/agent.cjs`
-  const ledger = `${remoteDir}/ledger.jsonl`
-  const title = `${remoteDir}/title`
-  const cliControl = `${remoteDir}/cli-control.json`
-  ssh(
-    `mkdir -p ${quote(remoteDir)} && cat > ${quote(script)} && : > ${quote(ledger)}`,
-    MAIL_PANE_AGENT_SOURCE
-  )
+  const join = WINDOWS_REMOTE ? path.win32.join : path.posix.join
+  const script = join(remoteDir, 'agent.cjs')
+  const ledger = join(remoteDir, 'ledger.jsonl')
+  const title = join(remoteDir, 'title')
+  const cliControl = join(remoteDir, 'cli-control.json')
+  if (WINDOWS_REMOTE) {
+    ssh(
+      powerShellCommand(
+        `New-Item -ItemType Directory -Force -Path ${powerShellLiteral(remoteDir)} | Out-Null`
+      )
+    )
+    writeWindowsFile(script, MAIL_PANE_AGENT_SOURCE)
+    writeWindowsFile(ledger, '')
+  } else {
+    ssh(
+      `mkdir -p ${quote(remoteDir)} && cat > ${quote(script)} && : > ${quote(ledger)}`,
+      MAIL_PANE_AGENT_SOURCE
+    )
+  }
 
   const readLedger = (): AgentLedgerEntry[] => {
-    const contents = ssh(`cat ${quote(ledger)} 2>/dev/null || true`)
+    const contents = ssh(
+      WINDOWS_REMOTE
+        ? `type ${windowsQuote(ledger)} 2>nul`
+        : `cat ${quote(ledger)} 2>/dev/null || true`
+    )
     return contents
       .split(/\r?\n/)
       .filter(Boolean)
@@ -69,11 +179,21 @@ function createRemoteAgent(remoteDir: string): RemoteAgent {
         }
       })
   }
+  const launchArg = WINDOWS_REMOTE ? windowsQuote : quote
+  const cliCommand = 'orca'
+  // PowerShell 5.1 drops empty native argv entries, so sentinels preserve positions.
+  const encodedReaction = WINDOWS_REMOTE ? Buffer.from('null').toString('base64') : ''
+  const cliEntry = WINDOWS_REMOTE ? '-' : ''
   return {
-    launchCommand: `node ${quote(script)} ${quote(ledger)} ${quote(title)} ${quote('')} ${quote(cliControl)} ${quote('')} ${quote('orca')}`,
-    setTitle: (value) => ssh(`cat > ${quote(title)}`, value),
-    runCli: (requestId, args) =>
-      ssh(`cat > ${quote(cliControl)}`, JSON.stringify({ requestId, args })),
+    launchCommand: `node ${launchArg(script)} ${launchArg(ledger)} ${launchArg(title)} ${launchArg(encodedReaction)} ${launchArg(cliControl)} ${launchArg(cliEntry)} ${launchArg(cliCommand)}`,
+    setTitle: (value) =>
+      WINDOWS_REMOTE ? writeWindowsFile(title, value) : ssh(`cat > ${quote(title)}`, value),
+    runCli: (requestId, args) => {
+      const value = JSON.stringify({ requestId, args })
+      return WINDOWS_REMOTE
+        ? writeWindowsFile(cliControl, value)
+        : ssh(`cat > ${quote(cliControl)}`, value)
+    },
     readLedger,
     readStdin: () =>
       readLedger()
@@ -89,10 +209,22 @@ async function readUserDataDir(electronApp: ElectronApplication): Promise<string
   return electronApp.evaluate(({ app }) => app.getPath('userData'))
 }
 
-async function reconnect(page: Page, targetId: string): Promise<void> {
+async function reconnect(page: Page, targetId: string, credential?: string): Promise<void> {
   const state = await page.evaluate(
-    async (id) => window.api.ssh.connect({ targetId: id }),
-    targetId
+    async ({ id, credential }) => {
+      const credentialUnsub = window.api.ssh.onCredentialRequest((request) => {
+        void window.api.ssh.submitCredential({
+          requestId: request.requestId,
+          value: credential ?? null
+        })
+      })
+      try {
+        return await window.api.ssh.connect({ targetId: id })
+      } finally {
+        credentialUnsub()
+      }
+    },
+    { id: targetId, credential }
   )
   expect(state?.status).toBe('connected')
   await page.evaluate(
@@ -106,6 +238,7 @@ async function reconnect(page: Page, targetId: string): Promise<void> {
 }
 
 test.describe('SSH terminal mailbox subscription', () => {
+  test.describe.configure({ timeout: 360_000 })
   test.skip(
     !RUN_REMOTE_SSH,
     'Set ORCA_E2E_SSH_SUBSCRIPTION=1 to run against a configured SSH host.'
@@ -115,19 +248,19 @@ test.describe('SSH terminal mailbox subscription', () => {
     orcaPage,
     electronApp
   }) => {
-    test.setTimeout(360_000)
     const suffix = randomUUID()
-    const remoteRoot = `/tmp/orca-mailbox-subscription-${suffix}`
-    const remoteRepo = `${remoteRoot}/repo`
-    const remoteAgentDir = `${remoteRoot}/agent`
-    ssh(
-      `mkdir -p ${quote(remoteRepo)} && cd ${quote(remoteRepo)} && git init -q && git config user.email e2e@test.local && git config user.name 'Orca SSH E2E' && printf 'ssh mailbox e2e\n' > README.md && git add README.md && git commit -qm initial`
-    )
-    const agent = createRemoteAgent(remoteAgentDir)
+    const remoteTemp = WINDOWS_REMOTE ? ssh('echo %TEMP%').trim() : '/tmp'
+    const join = WINDOWS_REMOTE ? path.win32.join : path.posix.join
+    const remoteRoot = join(remoteTemp, `orca-mailbox-subscription-${suffix}`)
+    const remoteRepo = join(remoteRoot, 'repo')
+    const remoteAgentDir = join(remoteRoot, 'agent')
 
+    let agent!: RemoteAgent
     let targetId: string | null = null
     let createdWorktreeId: string | null = null
     try {
+      seedRemoteRepo(remoteRepo)
+      agent = createRemoteAgent(remoteAgentDir)
       await waitForSessionReady(orcaPage)
       const remote = await connectSshTestTarget(
         orcaPage,
@@ -138,7 +271,11 @@ test.describe('SSH terminal mailbox subscription', () => {
           username: SSH_USER,
           relayGracePeriodSeconds: 0
         },
-        { remotePath: remoteRepo, displayName: `SSH mailbox ${suffix}` }
+        {
+          remotePath: remoteRepo,
+          displayName: `SSH mailbox ${suffix}`,
+          credential: SSH_PASSWORD
+        }
       )
       targetId = remote.targetId
       const userDataDir = await readUserDataDir(electronApp)
@@ -169,11 +306,21 @@ test.describe('SSH terminal mailbox subscription', () => {
           `Remote Codex worktree did not publish a startup terminal handle: ${JSON.stringify(created.result)}`
         )
       }
-      await expect
-        .poll(() => agent.readLedger().find((entry) => entry.event === 'start'), {
-          timeout: 60_000
+      try {
+        await expect
+          .poll(() => agent.readLedger().find((entry) => entry.event === 'start'), {
+            timeout: 60_000
+          })
+          .toMatchObject({ hasLaunchToken: true, terminalHandle: handle })
+      } catch (error) {
+        const terminal = await client
+          .call('terminal.read', { terminal: handle, screen: true })
+          .then((response) => response.result)
+          .catch((readError) => ({ readError: String(readError) }))
+        throw new Error(`Remote agent did not start: ${JSON.stringify(terminal)}`, {
+          cause: error
         })
-        .toMatchObject({ hasLaunchToken: true, terminalHandle: handle })
+      }
 
       let ptyId: string | null = null
       await expect
@@ -257,7 +404,7 @@ test.describe('SSH terminal mailbox subscription', () => {
       expect(mailDisposition(readMailRow(userDataDir, sent.result.message.id))).toBe('pending')
       expect(agent.readStdin().split(POINTER_COMMAND).length - 1).toBe(pointersBefore)
 
-      await reconnect(orcaPage, targetId)
+      await reconnect(orcaPage, targetId, SSH_PASSWORD)
       agent.runCli('status-after-reconnect', ['orchestration', 'subscription', 'status', '--json'])
       await expect
         .poll(() => agent.readCliResult('status-after-reconnect'), { timeout: 30_000 })
@@ -327,7 +474,11 @@ test.describe('SSH terminal mailbox subscription', () => {
           }, targetId)
           .catch(() => undefined)
       }
-      ssh(`rm -rf ${quote(remoteRoot)}`)
+      try {
+        removeRemoteRoot(remoteRoot)
+      } catch {
+        // Windows can retain a just-exited ConPTY file handle briefly.
+      }
     }
   })
 })
