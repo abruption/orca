@@ -414,6 +414,7 @@ test.describe('SSH terminal mailbox subscription', () => {
         .not.toBe('connected')
 
       const pointersBefore = agent.readStdin().split(POINTER_COMMAND).length - 1
+      const entersBefore = agent.readStdin().split('\r').length - 1
       const sent = await client.call<{ message: { id: string } }>('orchestration.send', {
         to: handle,
         from: 'ssh-e2e-sender',
@@ -462,9 +463,14 @@ test.describe('SSH terminal mailbox subscription', () => {
         .toBe(CODEX_IDLE_TITLE)
       await expect
         .poll(() => agent.readStdin().split(POINTER_COMMAND).length - 1, { timeout: 60_000 })
-        .toBeGreaterThan(pointersBefore)
+        .toBe(pointersBefore + 1)
       expect(agent.readStdin()).not.toContain('REMOTE_BODY_MUST_NOT_ENTER_PTY')
-      expect(agent.readStdin()).toContain('\r')
+      await expect
+        .poll(() => agent.readStdin().split('\r').length - 1, { timeout: 10_000 })
+        .toBe(entersBefore + 1)
+      await new Promise((resolve) => setTimeout(resolve, 1_000))
+      expect(agent.readStdin().split(POINTER_COMMAND).length - 1).toBe(pointersBefore + 1)
+      expect(agent.readStdin().split('\r').length - 1).toBe(entersBefore + 1)
       await expect
         .poll(() => mailDisposition(readMailRow(userDataDir, sent.result.message.id)), {
           timeout: 30_000
