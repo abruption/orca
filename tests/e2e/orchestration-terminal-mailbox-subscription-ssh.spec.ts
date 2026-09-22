@@ -6,6 +6,7 @@ import path from 'node:path'
 import type { ElectronApplication, Page } from '@stablyai/playwright-test'
 import { RuntimeClient } from '../../src/cli/runtime-client'
 import { powerShellCommand, powerShellLiteral } from '../../src/main/ssh/ssh-remote-powershell'
+import type { SshConnectionState } from '../../src/shared/ssh-types'
 import type { RuntimeTerminalListResult } from '../../src/shared/runtime-types'
 import { test, expect } from './helpers/orca-app'
 import {
@@ -209,7 +210,11 @@ async function readUserDataDir(electronApp: ElectronApplication): Promise<string
   return electronApp.evaluate(({ app }) => app.getPath('userData'))
 }
 
-async function reconnect(page: Page, targetId: string, credential?: string): Promise<void> {
+async function reconnect(
+  page: Page,
+  targetId: string,
+  credential?: string
+): Promise<SshConnectionState> {
   const state = await page.evaluate(
     async ({ id, credential }) => {
       const credentialUnsub = window.api.ssh.onCredentialRequest((request) => {
@@ -227,6 +232,9 @@ async function reconnect(page: Page, targetId: string, credential?: string): Pro
     { id: targetId, credential }
   )
   expect(state?.status).toBe('connected')
+  if (!state) {
+    throw new Error('SSH reconnect returned no connection state')
+  }
   await page.evaluate(
     ({ id, state }) => {
       if (state) {
@@ -235,6 +243,7 @@ async function reconnect(page: Page, targetId: string, credential?: string): Pro
     },
     { id: targetId, state }
   )
+  return state
 }
 
 test.describe('SSH terminal mailbox subscription', () => {
@@ -278,6 +287,18 @@ test.describe('SSH terminal mailbox subscription', () => {
         }
       )
       targetId = remote.targetId
+      const initialConnectionState = await orcaPage.evaluate(
+        async (id) => window.api.ssh.getState({ targetId: id }),
+        targetId
+      )
+      if (
+        !initialConnectionState?.providerEpoch ||
+        initialConnectionState.connectionGeneration === undefined
+      ) {
+        throw new Error(
+          `Initial SSH connection returned incomplete authority: ${JSON.stringify(initialConnectionState)}`
+        )
+      }
       const userDataDir = await readUserDataDir(electronApp)
       const client = new RuntimeClient(userDataDir, 30_000, null, null)
 
@@ -404,7 +425,12 @@ test.describe('SSH terminal mailbox subscription', () => {
       expect(mailDisposition(readMailRow(userDataDir, sent.result.message.id))).toBe('pending')
       expect(agent.readStdin().split(POINTER_COMMAND).length - 1).toBe(pointersBefore)
 
-      await reconnect(orcaPage, targetId, SSH_PASSWORD)
+      const reconnectedState = await reconnect(orcaPage, targetId, SSH_PASSWORD)
+      expect(reconnectedState.providerEpoch).toBeTruthy()
+      expect(reconnectedState.providerEpoch).not.toBe(initialConnectionState.providerEpoch)
+      expect(reconnectedState.connectionGeneration).toBeGreaterThan(
+        initialConnectionState.connectionGeneration
+      )
       agent.runCli('status-after-reconnect', ['orchestration', 'subscription', 'status', '--json'])
       await expect
         .poll(() => agent.readCliResult('status-after-reconnect'), { timeout: 30_000 })
