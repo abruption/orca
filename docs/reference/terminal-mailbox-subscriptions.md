@@ -78,3 +78,10 @@ through its existing live-leaf delivery path. It does not add background PTY
 resolution, restart slept panes, introduce a Codex app-server controller, or migrate
 mail between handles. Related work: Orca issues/PRs #18206, #8057, #12033, #18731,
 and #18208.
+
+The live provider validation covers Codex and Claude Code. Antigravity CLI 1.2.7 is
+outside the v1 automatic-wake scope: after a successful receiver subscription it can
+temporarily make the current terminal authority unverifiable. Orca therefore leaves
+the mail unread and writes no pointer or Enter. Antigravity sessions should inspect
+the inbox explicitly until their authority/readiness lifecycle has a stable native
+integration.

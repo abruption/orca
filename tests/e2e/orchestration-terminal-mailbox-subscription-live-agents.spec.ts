@@ -17,7 +17,7 @@ const CLI_ENTRY = path.join(process.cwd(), 'out', 'cli', 'index.js')
 test.use({ orcaAppExtraEnv: { ORCA_E2E_TERMINAL_PARKING_DELAY_MS: '600000' } })
 
 type LiveAgentCase = {
-  agent: Extract<TuiAgent, 'codex' | 'claude' | 'antigravity'>
+  agent: Extract<TuiAgent, 'codex' | 'claude'>
   command: (credentialDir: string | null, prompt: string) => string
   promptAtLaunch: boolean
 }
@@ -86,22 +86,6 @@ function liveAgentCases(): LiveAgentCase[] {
           '/bin/sh',
           '-c',
           shellQuote(`${claudeTrustBootstrap(home)} ${shellQuote(prompt)}`)
-        ].join(' ')
-    },
-    {
-      agent: 'antigravity',
-      promptAtLaunch: true,
-      command: (_, prompt) =>
-        [
-          '/usr/bin/env',
-          '-u XDG_CONFIG_HOME',
-          '-u XDG_DATA_HOME',
-          '-u XDG_STATE_HOME',
-          `HOME=${shellQuote(home)}`,
-          shellQuote(path.join(home, '.local', 'bin', 'agy')),
-          '--dangerously-skip-permissions',
-          '--prompt-interactive',
-          shellQuote(prompt)
         ].join(' ')
     }
   ]
@@ -187,11 +171,9 @@ test.describe('live terminal mailbox subscription agents', () => {
 
       let createdTerminalHandle: string | null = null
       let handle: string | null = null
-      let diagnosticStatusPath: string | null = null
       try {
         await orcaPage.getByRole('button', { name: /^(New tab|새 탭)$/ }).click({ force: true })
-        const label =
-          live.agent === 'codex' ? 'Codex' : live.agent === 'claude' ? 'Claude' : 'Antigravity'
+        const label = live.agent === 'codex' ? 'Codex' : 'Claude'
         const launch = orcaPage
           .getByRole('menuitem', { name: new RegExp(`^${label}(?:\\s|$)`, 'i') })
           .first()
@@ -228,17 +210,6 @@ test.describe('live terminal mailbox subscription agents', () => {
             })
             .toBe(true)
           await client.call('terminal.send', { terminal: handle, text: '1', enter: true })
-        } else if (live.agent === 'antigravity') {
-          await expect
-            .poll(
-              async () =>
-                (await readTerminalText(client, handle!)).includes(
-                  'Do you trust the contents of this project?'
-                ),
-              { timeout: 30_000, message: 'Antigravity did not show the workspace trust prompt' }
-            )
-            .toBe(true)
-          await client.call('terminal.send', { terminal: handle, text: '\r', enter: false })
         }
         if (!live.promptAtLaunch) {
           await client.call('terminal.send', { terminal: handle, text: prompt, enter: true })
@@ -309,25 +280,8 @@ test.describe('live terminal mailbox subscription agents', () => {
             .toBe('pushed')
         } catch (error) {
           const agentStatus = await client.call('terminal.agentStatus', { terminal: handle })
-          let subscriptionStatus = 'not queried'
-          if (live.agent === 'antigravity') {
-            diagnosticStatusPath = path.join(userDataDir, `antigravity-subscription-${marker}.json`)
-            const diagnosticPrompt = [
-              `Run this shell command: ${cliPrefix} orchestration subscription status --json > ${shellQuote(diagnosticStatusPath)}.`,
-              `When it finishes, reply exactly STATUS_${marker}.`
-            ].join(' ')
-            await client.call('terminal.send', {
-              terminal: handle,
-              text: diagnosticPrompt,
-              enter: true
-            })
-            await expect
-              .poll(() => existsSync(diagnosticStatusPath!), { timeout: 120_000 })
-              .toBe(true)
-            subscriptionStatus = readFileSync(diagnosticStatusPath, 'utf8')
-          }
           throw new Error(
-            `${live.agent} delivery status: ${JSON.stringify(agentStatus.result)}\nsubscription status: ${subscriptionStatus}\n${await readTerminalHistory(client, handle)}`,
+            `${live.agent} delivery status: ${JSON.stringify(agentStatus.result)}\n${await readTerminalHistory(client, handle)}`,
             {
               cause: error
             }
@@ -351,9 +305,6 @@ test.describe('live terminal mailbox subscription agents', () => {
         }
         if (credentialDir) {
           rmSync(credentialDir, { recursive: true, force: true })
-        }
-        if (diagnosticStatusPath) {
-          rmSync(diagnosticStatusPath, { force: true })
         }
         rmSync(subscriptionReceiptPath, { force: true })
         if (live.agent === 'claude') {
