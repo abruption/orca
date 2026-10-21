@@ -13,6 +13,10 @@ afterEach(() => {
   Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
 })
 
+function procStat(pid: number, state: string, command = 'Xvfb (worker)'): string {
+  return `${pid} (${command}) ${state} ${Array(49).fill('0').join(' ')}`
+}
+
 function linuxProcess(state: string): void {
   Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
   readFileSyncMock.mockImplementation((path: string) => {
@@ -20,7 +24,7 @@ function linuxProcess(state: string): void {
       return '4321\n'
     }
     if (path === '/proc/4321/stat') {
-      return `4321 (Xvfb (worker)) ${state} 1 0 0`
+      return procStat(4321, state)
     }
     throw new Error(`Unexpected path: ${path}`)
   })
@@ -49,12 +53,42 @@ describe('X display process liveness', () => {
     expect(probeDisplayLock(99)).toBe('alive')
   })
 
-  it('retains signal evidence when proc is malformed', () => {
+  it.each([
+    'not a proc stat record',
+    'garbage) Z',
+    '4321 (Xvfb) Z',
+    `4321 (Xvfb) Z ${Array(48).fill('0').join(' ')}`,
+    procStat(4322, 'Z'),
+    procStat(4321, 'ZZ'),
+    procStat(4321, 'Z').replace(/0$/, 'invalid'),
+    procStat(4321, 'Z').replace(') Z', ')Z'),
+    procStat(4321, 'Z').replace(' (', ' ')
+  ])('retains signal evidence for malformed or mismatched proc: %s', (stat) => {
     linuxProcess('S')
     readFileSyncMock.mockImplementation((path: string) =>
-      path === '/tmp/.X99-lock' ? '4321\n' : 'not a proc stat record'
+      path === '/tmp/.X99-lock' ? '4321\n' : stat
     )
     expect(probeDisplayLock(99)).toBe('alive')
+  })
+
+  it.each(['Xvfb (worker)', 'Xvfb) Z (worker', 'Xvfb with spaces'])(
+    'recognizes a complete zombie record with command %s',
+    (command) => {
+      linuxProcess('Z')
+      readFileSyncMock.mockImplementation((path: string) =>
+        path === '/tmp/.X99-lock' ? '4321\n' : procStat(4321, 'Z', command)
+      )
+      expect(probeDisplayLock(99)).toBe('dead')
+    }
+  )
+
+  it('accepts signed and large numeric fields and future appended fields', () => {
+    linuxProcess('Z')
+    const stat = `${procStat(4321, 'Z')} -1 18446744073709551615`
+    readFileSyncMock.mockImplementation((path: string) =>
+      path === '/tmp/.X99-lock' ? '4321\n' : stat
+    )
+    expect(probeDisplayLock(99)).toBe('dead')
   })
 
   it.each([

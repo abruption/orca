@@ -41,7 +41,7 @@ export function probeDisplayLock(displayNumber: number): DisplayLockProbe {
   if (process.platform === 'linux') {
     try {
       // signal 0 also succeeds for an unreaped child, which cannot serve X11 requests.
-      if (parseLinuxProcessState(readFileSync(`/proc/${pid}/stat`, 'utf8')) === 'Z') {
+      if (parseLinuxProcessState(readFileSync(`/proc/${pid}/stat`, 'utf8'), pid) === 'Z') {
         return 'dead'
       }
     } catch {
