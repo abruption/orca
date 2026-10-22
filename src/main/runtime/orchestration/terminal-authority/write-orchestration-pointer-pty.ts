@@ -17,6 +17,9 @@ import { parseAppSshPtyId } from '../../../../shared/ssh-pty-id'
 import { isTerminalLeafId, makePaneKey } from '../../../../shared/stable-pane-id'
 import type { OrchestrationMailboxLeaf } from '../mailbox-owner'
 import type { OrchestrationMailboxPointerSubmitTarget } from '../mailbox-pointer-submit'
+import { ORCA_LAYOUT_OWNER_IS_MAIN } from '../../../../shared/layout-owner-switch'
+import { startedMainTerminalSurfaces } from '../../terminal/surface/main-terminal-surfaces'
+import { mainPaneVerdict } from '../../terminal/surface/main-pane-verdict'
 
 export abstract class OrcaRuntimeWithWriteOrchestrationPointerPty extends OrcaRuntimeWithRefreshFloatingWorkspacePtyLiveness {
   protected abstract issueHandle(leaf: RuntimeLeafRecord): string
@@ -127,6 +130,12 @@ export abstract class OrcaRuntimeWithWriteOrchestrationPointerPty extends OrcaRu
     return agentIdentity ? { agentIdentity } : {}
   }
 
+  /** A user's pane name from the saved layout: every client's pane rename lands there. */
+  protected getSavedPaneTitle(worktreeId: string, tabId: string, leafId: string): string | null {
+    const layout = this.getWorkspaceSessionForWorktree(worktreeId)?.terminalLayoutsByTabId?.[tabId]
+    return layout?.titlesByLeafId?.[leafId]?.trim() || null
+  }
+
   protected buildTerminalSummary(
     leaf: RuntimeLeafRecord,
     worktreesById: Map<string, ResolvedWorktree>,
@@ -137,6 +146,7 @@ export abstract class OrcaRuntimeWithWriteOrchestrationPointerPty extends OrcaRu
 
     const pty = leaf.ptyId ? this.ptysById.get(leaf.ptyId) : undefined
     const title = getLatestLeafTitle(this.getLeafDisplayRecord(leaf), tab?.title ?? null)
+    const paneTitle = this.getSavedPaneTitle(leaf.worktreeId, leaf.tabId, leaf.leafId)
     // Why: leaf.connected mirrors the renderer graph (`ptyId !== null`), so a
     // restored surface whose PTY died with a prior run still reads connected.
     // Demote only on a controller-proven absence, and only for locally-scoped
@@ -152,6 +162,9 @@ export abstract class OrcaRuntimeWithWriteOrchestrationPointerPty extends OrcaRu
       !isRemoteRuntimePtyId(leaf.ptyId) &&
       parseAppSshPtyId(leaf.ptyId) === null &&
       this.ptyController?.hasPty?.(leaf.ptyId) !== true
+    const mainPane = ORCA_LAYOUT_OWNER_IS_MAIN
+      ? (startedMainTerminalSurfaces(this)?.paneOf(leaf.tabId, leaf.leafId) ?? null)
+      : null
     return {
       handle: this.issueHandle(leaf),
       ptyId: leaf.ptyId,
@@ -163,8 +176,13 @@ export abstract class OrcaRuntimeWithWriteOrchestrationPointerPty extends OrcaRu
       tabId: leaf.tabId,
       leafId: leaf.leafId,
       title,
+      ...(paneTitle ? { paneTitle } : {}),
       connected: provenAbsent ? false : leaf.connected,
       writable: provenAbsent ? false : leaf.writable,
+      // A pane with a status is never connected; its verdict says what the host knows.
+      ...(ORCA_LAYOUT_OWNER_IS_MAIN && mainPane?.hasStatus
+        ? { connected: false, writable: false }
+        : {}),
       lastOutputAt: leaf.lastOutputAt,
       preview: leaf.preview,
       ...(leaf.lastExitCause ? { exitCause: leaf.lastExitCause } : {}),
@@ -174,7 +192,17 @@ export abstract class OrcaRuntimeWithWriteOrchestrationPointerPty extends OrcaRu
         pty?.foregroundAgent,
         title,
         isTerminalLeafId(leaf.leafId) ? makePaneKey(leaf.tabId, leaf.leafId) : null
-      )
+      ),
+      ...(ORCA_LAYOUT_OWNER_IS_MAIN && mainPane
+        ? {
+            verdict: mainPaneVerdict(mainPane, {
+              ptysById: this.ptysById,
+              livenessOf: (ptyId) => this.getPtyLivenessVerdict(ptyId),
+              inventoryLivePtyIds: provenLivePtyIds,
+              controllerHasPty: (ptyId) => this.ptyController?.hasPty?.(ptyId) === true
+            })
+          }
+        : {})
     }
   }
 }
