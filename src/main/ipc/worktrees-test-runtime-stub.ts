@@ -1,6 +1,6 @@
 import { _resetPendingWorktreeRemovalsForTests } from '../worktree-background-removal'
 import { vi } from 'vitest'
-import { WorkspaceCreationRegistry } from '../runtime/sidebar-inputs/workspace-creation-registry'
+import { WorkspaceLifecycleQueue } from '../runtime/workspaces/workspace-lifecycle-queue'
 import { ORCA_SIDEBAR_INPUTS_IS_MAIN } from '../../shared/sidebar-inputs-switch'
 
 export type WorktreeRuntimeStub = {
@@ -13,6 +13,7 @@ export type WorktreeRuntimeStub = {
   recordOptimisticReconcileToken: ReturnType<typeof vi.fn>
   reconcileWorktreeBaseStatus: ReturnType<typeof vi.fn>
   clearOptimisticReconcileToken: ReturnType<typeof vi.fn>
+  releaseRemovedWorktreeHostSessions: ReturnType<typeof vi.fn>
   resolveManagedMrBase: ReturnType<typeof vi.fn>
   getSetupTerminalTitle: ReturnType<typeof vi.fn>
   createTerminal: ReturnType<typeof vi.fn>
@@ -23,7 +24,7 @@ export type WorktreeRuntimeStub = {
   acquireFileWatcherRemoval: ReturnType<typeof vi.fn>
   hydrateInferredWorktreeLineage: ReturnType<typeof vi.fn>
   publishWorktreeRemovalChange: ReturnType<typeof vi.fn>
-  workspaceCreations: WorkspaceCreationRegistry | null
+  workspaceLifecycle: WorkspaceLifecycleQueue | null
 }
 
 /** Why: create-flow tests need a minimal runtime; full fetchRemoteWithCache behavior lives in fetch-remote-cache.test.ts. */
@@ -34,7 +35,7 @@ export function createWorktreeRuntimeStub(mainWindow?: {
   _resetPendingWorktreeRemovalsForTests()
   const runtimeStub: WorktreeRuntimeStub = {
     // Mirrors the runtime field: listed only when the sidebar-inputs switch is on.
-    workspaceCreations: ORCA_SIDEBAR_INPUTS_IS_MAIN ? new WorkspaceCreationRegistry() : null,
+    workspaceLifecycle: ORCA_SIDEBAR_INPUTS_IS_MAIN ? new WorkspaceLifecycleQueue() : null,
     resolveRemoteTrackingBase: vi.fn().mockResolvedValue(null),
     hasRemoteTrackingRef: vi.fn().mockResolvedValue(false),
     getOrStartRemoteTrackingBaseRefresh: vi.fn().mockResolvedValue({ ok: true }),
@@ -44,6 +45,7 @@ export function createWorktreeRuntimeStub(mainWindow?: {
     recordOptimisticReconcileToken: vi.fn().mockReturnValue('token-1'),
     reconcileWorktreeBaseStatus: vi.fn(),
     clearOptimisticReconcileToken: vi.fn(),
+    releaseRemovedWorktreeHostSessions: vi.fn(),
     resolveManagedMrBase: vi.fn().mockResolvedValue({ baseBranch: 'origin/mr-branch' }),
     getSetupTerminalTitle: vi.fn().mockReturnValue('Setup'),
     createTerminal: vi.fn().mockResolvedValue({
