@@ -27,6 +27,7 @@ import {
   markPaneComplexScriptOutput,
   clearPaneWebglTextureAtlases,
   presentPaneViewports,
+  presentPaneViewportsPreservingSynchronizedOutput,
   resetPaneWebglTextureAtlases,
   resumePaneRendering,
   setPaneGpuRenderingState,
@@ -293,6 +294,10 @@ export class PaneManager {
 
   presentForcedViewports(): void {
     presentPaneViewports(this.panes.values())
+  }
+
+  presentViewportsPreservingSynchronizedOutput(): void {
+    presentPaneViewportsPreservingSynchronizedOutput(this.panes.values())
   }
 
   setAtlasRecoveryVisible(visible: boolean): void {

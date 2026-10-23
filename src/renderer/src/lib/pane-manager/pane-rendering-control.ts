@@ -12,6 +12,7 @@ import {
   markComplexScriptOutput,
   clearWebglTextureAtlas,
   presentPaneViewport,
+  presentPaneViewportPreservingSynchronizedOutput,
   resetWebglTextureAtlas
 } from './pane-webgl-renderer'
 import {
@@ -134,5 +135,13 @@ export function clearPaneWebglTextureAtlases(panes: Iterable<ManagedPaneInternal
 export function presentPaneViewports(panes: Iterable<ManagedPaneInternal>): void {
   for (const pane of panes) {
     presentPaneViewport(pane)
+  }
+}
+
+export function presentPaneViewportsPreservingSynchronizedOutput(
+  panes: Iterable<ManagedPaneInternal>
+): void {
+  for (const pane of panes) {
+    presentPaneViewportPreservingSynchronizedOutput(pane)
   }
 }

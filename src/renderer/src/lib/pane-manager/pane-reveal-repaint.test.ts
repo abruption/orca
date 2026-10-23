@@ -3,6 +3,8 @@ import type { ManagedPaneInternal } from './pane-manager-types'
 import { schedulePaneRevealPresent, schedulePaneRevealRepaint } from './pane-reveal-repaint'
 import { registerLivePaneManager, unregisterLivePaneManager } from './pane-manager-registry'
 import {
+  clearWebglTextureAtlas,
+  presentPaneViewportPreservingSynchronizedOutput,
   primeTerminalWebglAddon,
   resetTerminalWebglSuggestion,
   resetWebglTextureAtlas
@@ -12,6 +14,8 @@ import { PaneManager } from './pane-manager'
 type FakeWebglAddon = { clearTextureAtlas: ReturnType<typeof vi.fn> }
 type FakePaneManager = {
   resetWebglTextureAtlases: Mock<() => void>
+  clearWebglTextureAtlases: Mock<() => void>
+  presentViewportsPreservingSynchronizedOutput: Mock<() => void>
   refreshAllPanes: Mock<() => void>
 }
 
@@ -81,6 +85,16 @@ describe('schedulePaneRevealRepaint', () => {
           resetWebglTextureAtlas(pane)
         }
       }),
+      clearWebglTextureAtlases: vi.fn(() => {
+        for (const pane of getPanes()) {
+          clearWebglTextureAtlas(pane)
+        }
+      }),
+      presentViewportsPreservingSynchronizedOutput: vi.fn(() => {
+        for (const pane of getPanes()) {
+          presentPaneViewportPreservingSynchronizedOutput(pane)
+        }
+      }),
       refreshAllPanes: vi.fn(() => {
         for (const pane of getPanes()) {
           pane.terminal.refresh(0, pane.terminal.rows - 1)
@@ -146,8 +160,12 @@ describe('schedulePaneRevealRepaint', () => {
     flushFrame()
     flushFrame()
 
-    expect(targetManager.resetWebglTextureAtlases).toHaveBeenCalledTimes(1)
-    expect(siblingManager.resetWebglTextureAtlases).toHaveBeenCalledTimes(1)
+    expect(targetManager.resetWebglTextureAtlases).not.toHaveBeenCalled()
+    expect(siblingManager.resetWebglTextureAtlases).not.toHaveBeenCalled()
+    expect(targetManager.presentViewportsPreservingSynchronizedOutput).toHaveBeenCalledOnce()
+    expect(siblingManager.presentViewportsPreservingSynchronizedOutput).toHaveBeenCalledOnce()
+    expect(targetManager.clearWebglTextureAtlases).toHaveBeenCalledTimes(1)
+    expect(siblingManager.clearWebglTextureAtlases).toHaveBeenCalledTimes(1)
     expect((siblingPane.webglAddon as never as FakeWebglAddon).clearTextureAtlas).toHaveBeenCalled()
     expect(siblingPane.terminal.refresh).toHaveBeenCalledWith(0, 23)
   })
@@ -163,8 +181,8 @@ describe('schedulePaneRevealRepaint', () => {
     flushFrame()
     flushFrame()
 
-    expect(firstManager.resetWebglTextureAtlases).toHaveBeenCalledTimes(1)
-    expect(secondManager.resetWebglTextureAtlases).toHaveBeenCalledTimes(1)
+    expect(firstManager.clearWebglTextureAtlases).toHaveBeenCalledTimes(1)
+    expect(secondManager.clearWebglTextureAtlases).toHaveBeenCalledTimes(1)
   })
 
   it('reattaches a missing WebGL addon before repainting', () => {
@@ -176,7 +194,7 @@ describe('schedulePaneRevealRepaint', () => {
     flushFrame()
 
     expect(pane.webglAddon).not.toBeNull()
-    expect(manager.resetWebglTextureAtlases).toHaveBeenCalledTimes(1)
+    expect(manager.clearWebglTextureAtlases).toHaveBeenCalledTimes(1)
     expect(pane.terminal.refresh).toHaveBeenCalled()
   })
 

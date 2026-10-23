@@ -39,6 +39,8 @@ export type PaneManagerLike = {
   resumeRendering(): void
   setTerminalGpuAcceleration(mode: GlobalSettings['terminalGpuAcceleration']): void
   getRenderingDiagnostics(): PaneRenderingDiagnostics[]
+  clearWebglTextureAtlases: PaneManager['clearWebglTextureAtlases']
+  scheduleRevealRepaint: PaneManager['scheduleRevealRepaint']
   resetWebglTextureAtlases(): void
   hasWebglRenderer(paneId: number): boolean
   getNumericIdForLeaf(leafId: string): number | null

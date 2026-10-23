@@ -88,7 +88,7 @@ function flushPaneRevealRepaints(): void {
     }
   }
   if (livePanes.size > 0) {
-    resetAndRefreshAllTerminalWebglAtlases('settled-reveal')
+    resetAndRefreshAllTerminalWebglAtlases('settled-reveal', { preserveSynchronizedOutput: true })
   }
 }
 

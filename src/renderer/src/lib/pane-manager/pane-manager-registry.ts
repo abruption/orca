@@ -6,6 +6,7 @@ type RegisteredPaneManager = {
   resetWebglTextureAtlases(): void
   clearWebglTextureAtlases?: () => void
   presentForcedViewports?: () => void
+  presentViewportsPreservingSynchronizedOutput?: () => void
   fitAllPanes?: () => void
   refreshAllPanes?: () => void
   getRenderingDiagnostics?: () => PaneRenderingDiagnostics[]
@@ -29,7 +30,10 @@ export function unregisterLivePaneManager(manager: RegisteredPaneManager): void 
   liveManagers.delete(manager)
 }
 
-export function resetAndRefreshAllTerminalWebglAtlases(reason?: string): void {
+export function resetAndRefreshAllTerminalWebglAtlases(
+  reason?: string,
+  options: { preserveSynchronizedOutput?: boolean } = {}
+): void {
   // Why: the atlas wipe is the heavy recovery path; recording it lets a freeze
   // report show whether a post-wake repaint actually ran. Silent breadcrumb.
   const recoveryManagers = Array.from(liveManagers).filter(
@@ -49,7 +53,8 @@ export function resetAndRefreshAllTerminalWebglAtlases(reason?: string): void {
     try {
       if (manager.clearWebglTextureAtlases) {
         manager.clearWebglTextureAtlases()
-      } else {
+      } else if (!options.preserveSynchronizedOutput) {
+        // Legacy resets also force a paint, so ordinary reveal must skip that fallback.
         manager.resetWebglTextureAtlases()
       }
       resetManagers.push(manager)
@@ -60,7 +65,13 @@ export function resetAndRefreshAllTerminalWebglAtlases(reason?: string): void {
   }
   for (const manager of resetManagers) {
     try {
-      if (manager.presentForcedViewports) {
+      if (options.preserveSynchronizedOutput) {
+        if (manager.presentViewportsPreservingSynchronizedOutput) {
+          manager.presentViewportsPreservingSynchronizedOutput()
+        } else {
+          manager.refreshAllPanes?.()
+        }
+      } else if (manager.presentForcedViewports) {
         manager.presentForcedViewports()
       } else {
         manager.refreshAllPanes?.()

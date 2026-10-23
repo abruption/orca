@@ -147,6 +147,88 @@ describe('pane manager registry', () => {
     expect(healthy.refreshAllPanes).toHaveBeenCalledTimes(1)
   })
 
+  it('clears every visible atlas before presenting with synchronized output preserved', () => {
+    const order: string[] = []
+    const managers = ['first', 'second'].map((name) => ({
+      resetWebglTextureAtlases: vi.fn<() => void>(),
+      clearWebglTextureAtlases: vi.fn<() => void>(() => order.push(`${name}-clear`)),
+      presentForcedViewports: vi.fn<() => void>(),
+      presentViewportsPreservingSynchronizedOutput: vi.fn<() => void>(() =>
+        order.push(`${name}-present`)
+      ),
+      refreshAllPanes: vi.fn<() => void>(),
+      isVisibleForAtlasRecovery: () => true
+    }))
+    for (const manager of managers) {
+      registerLivePaneManager(manager)
+      registeredManagers.push(manager)
+    }
+
+    resetAndRefreshAllTerminalWebglAtlases('settled-reveal', {
+      preserveSynchronizedOutput: true
+    })
+
+    expect(order).toEqual(['first-clear', 'second-clear', 'first-present', 'second-present'])
+    for (const manager of managers) {
+      expect(manager.resetWebglTextureAtlases).not.toHaveBeenCalled()
+      expect(manager.presentForcedViewports).not.toHaveBeenCalled()
+      expect(manager.refreshAllPanes).not.toHaveBeenCalled()
+    }
+  })
+
+  it('uses ordinary refresh without forcing legacy managers during settled reveal', () => {
+    const manager = {
+      resetWebglTextureAtlases: vi.fn<() => void>(),
+      presentForcedViewports: vi.fn<() => void>(),
+      refreshAllPanes: vi.fn<() => void>()
+    }
+    registerLivePaneManager(manager)
+    registeredManagers.push(manager)
+
+    resetAndRefreshAllTerminalWebglAtlases('settled-reveal', {
+      preserveSynchronizedOutput: true
+    })
+
+    expect(manager.resetWebglTextureAtlases).not.toHaveBeenCalled()
+    expect(manager.presentForcedViewports).not.toHaveBeenCalled()
+    expect(manager.refreshAllPanes).toHaveBeenCalledOnce()
+  })
+
+  it('isolates hidden, unregistered and disposed managers during synchronized recovery', () => {
+    const makeManager = () => ({
+      resetWebglTextureAtlases: vi.fn<() => void>(),
+      clearWebglTextureAtlases: vi.fn<() => void>(),
+      presentViewportsPreservingSynchronizedOutput: vi.fn<() => void>(),
+      isVisibleForAtlasRecovery: () => true
+    })
+    const hidden = { ...makeManager(), isVisibleForAtlasRecovery: () => false }
+    const removed = makeManager()
+    const disposed = makeManager()
+    disposed.clearWebglTextureAtlases.mockImplementation(() => {
+      throw new Error('pane disposed')
+    })
+    const healthy = makeManager()
+    for (const manager of [hidden, removed, disposed, healthy]) {
+      registerLivePaneManager(manager)
+      registeredManagers.push(manager)
+    }
+    unregisterLivePaneManager(removed)
+
+    expect(() =>
+      resetAndRefreshAllTerminalWebglAtlases('settled-reveal', {
+        preserveSynchronizedOutput: true
+      })
+    ).not.toThrow()
+
+    for (const manager of [hidden, removed]) {
+      expect(manager.clearWebglTextureAtlases).not.toHaveBeenCalled()
+      expect(manager.presentViewportsPreservingSynchronizedOutput).not.toHaveBeenCalled()
+    }
+    expect(disposed.presentViewportsPreservingSynchronizedOutput).not.toHaveBeenCalled()
+    expect(healthy.clearWebglTextureAtlases).toHaveBeenCalledOnce()
+    expect(healthy.presentViewportsPreservingSynchronizedOutput).toHaveBeenCalledOnce()
+  })
+
   it('fits and refreshes every registered manager', () => {
     const first = {
       resetWebglTextureAtlases: vi.fn<() => void>(),
