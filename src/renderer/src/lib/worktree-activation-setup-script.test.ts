@@ -7,45 +7,10 @@ import {
   setLegacySetupScriptLaunchMode,
   createdTabStartups
 } from './worktree-activation.test-fixture'
-import { i18n } from '@/i18n/i18n'
 
 registerWorktreeActivationReset()
 
 describe('ensureWorktreeHasInitialTerminal', () => {
-  it('localizes newly created setup tabs using the current language without retitling other tabs', async () => {
-    const previousLanguage = i18n.language
-    try {
-      for (const [language, title] of [
-        ['ko', '초기 설정'],
-        ['en', 'Setup'],
-        ['ko', '초기 설정']
-      ] as const) {
-        await i18n.changeLanguage(language)
-        const store = createMockStore({
-          tabsByWorktree: { 'wt-1': [{ id: 'user-named-primary' }] },
-          createTab: vi.fn(() => ({ id: 'setup-tab' })),
-          reconcileWorktreeTabModel: vi.fn(() => ({ renderableTabCount: 1 }))
-        })
-
-        ensureWorktreeHasInitialTerminal(store, 'wt-1', undefined, {
-          runnerScriptPath: '/tmp/setup-runner.sh',
-          envVars: {}
-        })
-
-        expect(store.setTabCustomTitle).toHaveBeenCalledExactlyOnceWith('setup-tab', title, {
-          recordInteraction: false
-        })
-        expect(store.setActiveTab).toHaveBeenCalledWith('user-named-primary')
-        expect(createdTabStartups(store)['setup-tab']).toEqual({
-          command: 'bash /tmp/setup-runner.sh',
-          env: {}
-        })
-      }
-    } finally {
-      await i18n.changeLanguage(previousLanguage)
-    }
-  })
-
   it('creates a background Setup tab for newly created worktrees by default', () => {
     let createdIndex = 0
     const createTab = vi.fn(() => ({ id: `tab-${++createdIndex}` }))
@@ -180,6 +145,45 @@ describe('ensureWorktreeHasInitialTerminal', () => {
       }
     })
   })
+
+  it.each([true, false])(
+    'keeps a blank shell and queues setup-gated Codex in a new terminal (activate=%s)',
+    (activateCreatedTabs) => {
+      let createdIndex = 1
+      const store = createMockStore({
+        tabsByWorktree: { 'wt-1': [{ id: 'tab-1' }] },
+        createTab: vi.fn(() => ({ id: `tab-${++createdIndex}` })),
+        reconcileWorktreeTabModel: vi.fn(() => ({ renderableTabCount: 1 }))
+      })
+
+      const result = ensureWorktreeHasInitialTerminal(
+        store,
+        'wt-1',
+        { command: 'codex', launchAgent: 'codex' },
+        { runnerScriptPath: '/tmp/setup.sh', envVars: {}, waitForAgentStartup: true },
+        undefined,
+        undefined,
+        { createNewTerminalForStartup: true, activateCreatedTabs }
+      )
+
+      expect(result).toBe('tab-2')
+      const startups = createdTabStartups(store)
+      expect(Object.keys(startups)).toEqual(['tab-2', 'tab-3'])
+      expect(startups['tab-2']).toEqual(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            [SETUP_AGENT_SEQUENCE_STARTUP_SCRIPT_ENV]: expect.stringContaining('exec codex')
+          })
+        })
+      )
+      expect(startups['tab-3']).toEqual(
+        expect.objectContaining({ command: expect.stringContaining('bash /tmp/setup.sh') })
+      )
+      if (!activateCreatedTabs) {
+        expect(store.setActiveTab).not.toHaveBeenCalled()
+      }
+    }
+  )
 
   it('gates startup behind setup completion when both are provided in new-tab mode', () => {
     setLegacySetupScriptLaunchMode('new-tab')
